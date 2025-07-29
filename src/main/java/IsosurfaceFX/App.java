@@ -156,9 +156,9 @@ public class App extends Application {
         meshView.setCullFace(CullFace.NONE);
         meshView.setDrawMode(DrawMode.FILL);
         
-        TriangleMesh mesh = new TriangleMesh();
+        TriangleMesh mesh = new TriangleMesh(VertexFormat.POINT_NORMAL_TEXCOORD);
         for(Vector3d vector3d : isoGen.getVertexArray()) {
-            mesh.getPoints().setAll(
+            mesh.getPoints().addAll(
             Double.valueOf(vector3d.x).floatValue(),
             Double.valueOf(vector3d.y).floatValue(),
             Double.valueOf(vector3d.z).floatValue()
@@ -166,22 +166,23 @@ public class App extends Application {
         }
         
         mesh.getTexCoords().setAll(0,0);
-//        for(Vector3f vector3f : isoGen.getNormalArray()){
-//            mesh.getNormals().addAll(vector3f.get());
-//        }
+        for(Vector3f vector3f : isoGen.getNormalArray()){
+            mesh.getNormals().addAll(vector3f.get());
+        }
 
-        meshView.setMesh(mesh);
+
 //        for(int i=0;i<isoGen.getVertexArray().length-3;i+=3) {  //add each triangle tube segment 
-        for(int i=0;i<3;i+=3) {  //add each triangle tube segment 
+        for(int i=0;i<1000;i+=3) {  //add each triangle tube segment 
             //Face Triangle 
             mesh.getFaces().addAll(
             i,0,i+1, 0,i+3,0
             ); 
-            mesh.getFaces().addAll(
-                i+1,0, i+2, 0, i+3,0
-            ); 
+//            mesh.getFaces().addAll(
+//                i+1,0, i+2, 0, i+3,0
+//            ); 
         }        
 
+        meshView.setMesh(mesh);
         PhongMaterial mat = new PhongMaterial(Color.CYAN);
         meshView.setMaterial(mat);
         
