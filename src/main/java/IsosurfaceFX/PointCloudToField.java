@@ -1,116 +1,207 @@
 package IsosurfaceFX;
 
-import javafx.geometry.Bounds;
-import javafx.geometry.BoundingBox;
-import javafx.geometry.Point3D;
 import java.util.List;
 
 /**
  *
  * @author Sean Phillips
  */
-public class PointCloudToField {
-    private List<Point3D> points;
-    private double voxelSize = 2.0;
-    private int resolution = -1; // use voxelSize if resolution < 0
-    private double gaussianRadius = 4.0;
+import javafx.geometry.Point3D;
+import java.util.*;
+import java.util.stream.IntStream;
 
-    public static PointCloudToFieldBuilder builder() {
-        return new PointCloudToFieldBuilder();
+public class PointCloudToField {
+
+    public enum FieldMode {
+        GAUSSIAN,
+        SDF
+    }
+    private final List<Point3D> pointCloud;
+    private final FieldMode mode;
+    private final double influenceRadius;
+    private final Map<Point3D, Point3D> normalMap;
+
+    public PointCloudToField(List<Point3D> pointCloud, FieldMode mode, double influenceRadius, Map<Point3D, Point3D> normalMap) {
+        this.pointCloud = pointCloud;
+        this.mode = mode;
+        this.influenceRadius = influenceRadius;
+        this.normalMap = normalMap;
     }
 
-    public VoxelGrid generate() {
-        if (points == null || points.isEmpty()) {
-            throw new IllegalStateException("Point cloud must be set and non-empty");
+    public void applyTo(VoxelGrid grid) {
+        switch (mode) {
+            case GAUSSIAN -> {
+                computeGaussian(grid);
+            }
+
+            case SDF -> {
+                computeSignedDistanceField(grid);
+            }
         }
+    }
 
-        // Use VoxelGrid.Builder to construct base grid
-        VoxelGrid.Builder gridBuilder = VoxelGrid.builder().pointCloud(points);
-        if (resolution > 0) {
-            gridBuilder.resolution(resolution);
-        } else {
-            gridBuilder.voxelSize(voxelSize);
+    private void computeGaussian(VoxelGrid grid) {
+        int dimX = grid.getDimX();
+        int dimY = grid.getDimY();
+        int dimZ = grid.getDimZ();
+        double voxelSize = grid.getVoxelSize();
+        Point3D origin = grid.getOrigin();
+        double cutoffRadius = influenceRadius;
+        double cutoffRadiusSq = cutoffRadius * cutoffRadius;
+        double sigmaSq = influenceRadius * influenceRadius;
+
+        int influenceCells = (int) Math.ceil(cutoffRadius / voxelSize);
+
+        pointCloud.parallelStream().forEach(p -> {
+            int cx = (int) ((p.getX() - origin.getX()) / voxelSize);
+            int cy = (int) ((p.getY() - origin.getY()) / voxelSize);
+            int cz = (int) ((p.getZ() - origin.getZ()) / voxelSize);
+
+            for (int dx = -influenceCells; dx <= influenceCells; dx++) {
+                int x = cx + dx;
+                if (x < 0 || x >= dimX) {
+                    continue;
+                }
+
+                for (int dy = -influenceCells; dy <= influenceCells; dy++) {
+                    int y = cy + dy;
+                    if (y < 0 || y >= dimY) {
+                        continue;
+                    }
+
+                    for (int dz = -influenceCells; dz <= influenceCells; dz++) {
+                        int z = cz + dz;
+                        if (z < 0 || z >= dimZ) {
+                            continue;
+                        }
+
+                        Point3D voxelCenter = new Point3D(
+                                origin.getX() + x * voxelSize,
+                                origin.getY() + y * voxelSize,
+                                origin.getZ() + z * voxelSize
+                        );
+
+                        double dxSq = voxelCenter.getX() - p.getX();
+                        double dySq = voxelCenter.getY() - p.getY();
+                        double dzSq = voxelCenter.getZ() - p.getZ();
+                        double distSq = dxSq * dxSq + dySq * dySq + dzSq * dzSq;
+
+                        if (distSq > cutoffRadiusSq) {
+                            continue;
+                        }
+
+                        float contrib = (float) Math.exp(-distSq / (2.0 * sigmaSq));
+                        grid.set(x, y, z, grid.get(x, y, z) + contrib);
+                    }
+                }
+            }
         }
+        );
 
-        VoxelGrid grid = gridBuilder.build();
+    }
 
-        int nx = grid.getDimX();
-        int ny = grid.getDimY();
-        int nz = grid.getDimZ();
-        double vs = grid.getVoxelSize();
+    private void computeSignedDistanceField(VoxelGrid grid) {
+        int dimX = grid.getDimX();
+        int dimY = grid.getDimY();
+        int dimZ = grid.getDimZ();
+        double voxelSize = grid.getVoxelSize();
         Point3D origin = grid.getOrigin();
 
-        for (Point3D p : points) {
-            int rx = (int) Math.ceil(gaussianRadius / vs);
+        // Pre-initialize grid with high values
+        IntStream.range(0, dimX).parallel().forEach(x -> {
+            for (int y = 0; y < dimY; y++) {
+                for (int z = 0; z < dimZ; z++) {
+                    grid.set(x, y, z, Float.POSITIVE_INFINITY);
+                }
+            }
+        });
 
-            Point3D offset = p.subtract(origin);
-            int cx = (int) (offset.getX() / vs);
-            int cy = (int) (offset.getY() / vs);
-            int cz = (int) (offset.getZ() / vs);
+        for (Point3D p : pointCloud) {
+            Point3D normal = normalMap.get(p);
+            if (normal == null) {
+                continue;
+            }
 
-            for (int dx = -rx; dx <= rx; dx++) {
-                for (int dy = -rx; dy <= rx; dy++) {
-                    for (int dz = -rx; dz <= rx; dz++) {
-                        int x = cx + dx;
-                        int y = cy + dy;
+            int cx = (int) ((p.getX() - origin.getX()) / voxelSize);
+            int cy = (int) ((p.getY() - origin.getY()) / voxelSize);
+            int cz = (int) ((p.getZ() - origin.getZ()) / voxelSize);
+
+            int influenceCells = (int) Math.ceil(influenceRadius / voxelSize);
+
+            for (int dx = -influenceCells; dx <= influenceCells; dx++) {
+                int x = cx + dx;
+                if (x < 0 || x >= dimX) {
+                    continue;
+                }
+
+                for (int dy = -influenceCells; dy <= influenceCells; dy++) {
+                    int y = cy + dy;
+                    if (y < 0 || y >= dimY) {
+                        continue;
+                    }
+
+                    for (int dz = -influenceCells; dz <= influenceCells; dz++) {
                         int z = cz + dz;
+                        if (z < 0 || z >= dimZ) {
+                            continue;
+                        }
 
-                        if (x >= 0 && x < nx && y >= 0 && y < ny && z >= 0 && z < nz) {
-                            Point3D voxelPos = grid.getWorldPosition(x, y, z);
-                            double distSq = p.distance(voxelPos);
-                            double weight = Math.exp(-(distSq * distSq) / (gaussianRadius * gaussianRadius));
-                            float existing = grid.get(x, y, z);
-                            grid.set(x, y, z, (float) (existing + weight));
+                        Point3D voxelCenter = new Point3D(
+                                origin.getX() + x * voxelSize,
+                                origin.getY() + y * voxelSize,
+                                origin.getZ() + z * voxelSize
+                        );
+
+                        Point3D offset = voxelCenter.subtract(p);
+                        double distance = offset.magnitude();
+
+                        // ✅ Only update voxels within the influence radius
+                        if (distance > influenceRadius) {
+                            continue;
+                        }
+
+                        float currentValue = grid.get(x, y, z);
+                        if (distance < currentValue) {
+                            double dot = (distance == 0.0) ? 1.0 : offset.normalize().dotProduct(normal);
+                            float signedDistance = (float) (distance * (dot >= 0 ? 1.0 : -1.0));
+                            grid.set(x, y, z, signedDistance);
                         }
                     }
                 }
             }
         }
-
-        return grid;
     }
 
-    private Bounds computeBounds(List<Point3D> pts) {
-        double minX = Double.POSITIVE_INFINITY, minY = Double.POSITIVE_INFINITY, minZ = Double.POSITIVE_INFINITY;
-        double maxX = Double.NEGATIVE_INFINITY, maxY = Double.NEGATIVE_INFINITY, maxZ = Double.NEGATIVE_INFINITY;
-
-        for (Point3D p : pts) {
-            minX = Math.min(minX, p.getX());
-            minY = Math.min(minY, p.getY());
-            minZ = Math.min(minZ, p.getZ());
-            maxX = Math.max(maxX, p.getX());
-            maxY = Math.max(maxY, p.getY());
-            maxZ = Math.max(maxZ, p.getZ());
+    private void debugCenterValues(VoxelGrid grid) {
+        System.out.println("Sample SDF values near center:");
+        for (int x = grid.getDimX() / 2 - 2; x <= grid.getDimX() / 2 + 2; x++) {
+            for (int y = grid.getDimY() / 2 - 2; y <= grid.getDimY() / 2 + 2; y++) {
+                for (int z = grid.getDimZ() / 2 - 2; z <= grid.getDimZ() / 2 + 2; z++) {
+                    float v = grid.get(x, y, z);
+                    if (v != Float.POSITIVE_INFINITY) {
+                        System.out.printf("(%d,%d,%d): %.3f\n", x, y, z, v);
+                    }
+                }
+            }
         }
 
-        return new BoundingBox(minX, minY, minZ, maxX - minX, maxY - minY, maxZ - minZ);
     }
 
-    public static class PointCloudToFieldBuilder {
-        private final PointCloudToField field = new PointCloudToField();
+    private void debugMinMax(VoxelGrid grid) {
+        float min = Float.POSITIVE_INFINITY;
+        float max = Float.NEGATIVE_INFINITY;
 
-        public PointCloudToFieldBuilder withPoints(List<Point3D> pts) {
-            field.points = pts;
-            return this;
+        for (int x = 0; x < grid.getDimX(); x++) {
+            for (int y = 0; y < grid.getDimY(); y++) {
+                for (int z = 0; z < grid.getDimZ(); z++) {
+                    float v = grid.get(x, y, z);
+                    if (Float.isFinite(v)) {
+                        min = Math.min(min, v);
+                        max = Math.max(max, v);
+                    }
+                }
+            }
         }
-
-        public PointCloudToFieldBuilder withVoxelSize(double vs) {
-            field.voxelSize = vs;
-            return this;
-        }
-
-        public PointCloudToFieldBuilder withResolution(int res) {
-            field.resolution = res;
-            return this;
-        }
-
-        public PointCloudToFieldBuilder withGaussianRadius(double radius) {
-            field.gaussianRadius = radius;
-            return this;
-        }
-
-        public VoxelGrid build() {
-            return field.generate();
-        }
+        System.out.println("Voxel Grid Value Range: [" + min + ", " + max + "]");
     }
 }

@@ -35,7 +35,7 @@
         <quickhull3d.version>1.0.0</quickhull3d.version>
         <license.licenceFile>LICENSE.md</license.licenceFile>
         <license.licenseName>apache_v2</license.licenseName>
-        <mainClassName>IsosurfaceFXMain</mainClassName>
+        <mainClassName>MarchingCubesUIMain</mainClassName>
     </properties>
 
     <dependencies>
