@@ -42,7 +42,7 @@ public class MarchingCubesUIApp extends Application {
     private final Group pointCloudGroup = new Group();
     private final Group root3D = new Group(meshGroup, pointCloudGroup);
 
-    private double isovalue = 0.5;
+    private double isovalue = 0.0;
     private int pointCount = 150;
     private String shapeType = "sphere";
 
@@ -77,7 +77,7 @@ public class MarchingCubesUIApp extends Application {
         return subScene;
     }
 
-    private void regenerate(int resolution, double voxelSize, boolean useResolution, FieldMode mode) {
+    private void regenerate(int resolution, double influenceRadius, boolean useResolution, FieldMode mode) {
         pointCloudGroup.getChildren().clear();
         meshGroup.getChildren().clear();
 
@@ -86,7 +86,7 @@ public class MarchingCubesUIApp extends Application {
 
 Point3D min = PointCloudUtils.computeBoundingBoxMin(points);
 Point3D max = PointCloudUtils.computeBoundingBoxMax(points);
-double influenceRadius = 15.0; // or 5.0 for testing
+//double influenceRadius = 15.0; // or 5.0 for testing
 double margin = influenceRadius; // or 2.0 if influenceRadius is small
 Point3D origin = min.subtract(margin, margin, margin);
 double sizeX = max.getX() - min.getX() + 2 * margin;
@@ -102,13 +102,14 @@ VoxelGrid grid = new VoxelGrid.Builder()
         .build();
 
         
-System.out.println("VoxelGrid Origin: " + grid.getOrigin());
-System.out.println("VoxelGrid Dimensions: " + grid.getDimX() + " x " + grid.getDimY() + " x " + grid.getDimZ());
-System.out.println("VoxelGrid voxel size: " + grid.getVoxelSize());
-System.out.println("Point cloud bounds: " + min + " to " + max);
+//System.out.println("VoxelGrid Origin: " + grid.getOrigin());
+//System.out.println("VoxelGrid Dimensions: " + grid.getDimX() + " x " + grid.getDimY() + " x " + grid.getDimZ());
+//System.out.println("VoxelGrid voxel size: " + grid.getVoxelSize());
+//System.out.println("Point cloud bounds: " + min + " to " + max);
 
 
         Map<Point3D, Point3D> normalMap = PointCloudUtils.estimateNormals(points, 12);
+        
         PointCloudToField fieldGenerator = new PointCloudToField(
             points, mode, influenceRadius, normalMap);
         fieldGenerator.applyTo(grid);     
@@ -137,22 +138,22 @@ System.out.println("Point cloud bounds: " + min + " to " + max);
     private VBox createControls() {
         double SLIDER_PREF_WIDTH = 650;
         Slider resolutionSlider = new Slider(16, 256, 16);
-        Slider voxelSizeSlider = new Slider(0.005, 0.1, 0.025);        
-        Slider isoSlider = new Slider(0, 1, isovalue);
+        Slider influenceRadiusSlider = new Slider(0.1, 20, 10);        
+        Slider isoSlider = new Slider(-1, 1, isovalue);
         ComboBox<FieldMode> modeCombo = new ComboBox<>();
         modeCombo.getItems().addAll(FieldMode.values());
         modeCombo.getSelectionModel().selectFirst();
         
         isoSlider.setShowTickLabels(true);
         isoSlider.setShowTickMarks(true);
-        isoSlider.setMajorTickUnit(0.01);
+        isoSlider.setMajorTickUnit(0.1);
         isoSlider.setPrefWidth(SLIDER_PREF_WIDTH);
         isoSlider.setSnapToTicks(true);
         isoSlider.valueProperty().addListener((obs, old, val) -> {
             isovalue = val.doubleValue();
             regenerate(
                 Double.valueOf(resolutionSlider.getValue()).intValue(),
-                voxelSizeSlider.getValue(), true, modeCombo.getValue()
+                influenceRadiusSlider.getValue(), true, modeCombo.getValue()
             );
         });
         Slider countSlider = new Slider(100, 3000, pointCount);
@@ -163,7 +164,7 @@ System.out.println("Point cloud bounds: " + min + " to " + max);
             pointCount = val.intValue();
             regenerate(
                 Double.valueOf(resolutionSlider.getValue()).intValue(),
-                voxelSizeSlider.getValue(), true, modeCombo.getValue()
+                influenceRadiusSlider.getValue(), true, modeCombo.getValue()
             );
         });
 
@@ -175,7 +176,7 @@ System.out.println("Point cloud bounds: " + min + " to " + max);
             shapeType = val;
             regenerate(
                 Double.valueOf(resolutionSlider.getValue()).intValue(),
-                voxelSizeSlider.getValue(), true, modeCombo.getValue()
+                influenceRadiusSlider.getValue(), true, modeCombo.getValue()
             );
         });
         
@@ -186,12 +187,11 @@ System.out.println("Point cloud bounds: " + min + " to " + max);
         resolutionSlider.setSnapToTicks(true);
         resolutionSlider.setPrefWidth(SLIDER_PREF_WIDTH);
 
-        voxelSizeSlider.setShowTickLabels(true);
-        voxelSizeSlider.setShowTickMarks(true);
-        voxelSizeSlider.setMajorTickUnit(0.01);
-        voxelSizeSlider.setBlockIncrement(0.005);
-        voxelSizeSlider.setSnapToTicks(false);        
-        voxelSizeSlider.setPrefWidth(SLIDER_PREF_WIDTH);
+        influenceRadiusSlider.setShowTickLabels(true);
+        influenceRadiusSlider.setShowTickMarks(true);
+        influenceRadiusSlider.setMajorTickUnit(0.1);
+        influenceRadiusSlider.setSnapToTicks(true);        
+        influenceRadiusSlider.setPrefWidth(SLIDER_PREF_WIDTH);
 
         modeCombo.setValue(FieldMode.SDF);
 
@@ -199,33 +199,23 @@ System.out.println("Point cloud bounds: " + min + " to " + max);
             resolutionSlider.setValue(newVal.intValue()); 
             regenerate(
                 Double.valueOf(resolutionSlider.getValue()).intValue(),
-                voxelSizeSlider.getValue(), true, modeCombo.getValue()
+                influenceRadiusSlider.getValue(), true, modeCombo.getValue()
             );
         });
 
-        voxelSizeSlider.valueProperty().addListener((obs, oldVal, newVal) -> {
+        influenceRadiusSlider.valueProperty().addListener((obs, oldVal, newVal) -> {
             regenerate(
                 Double.valueOf(resolutionSlider.getValue()).intValue(),
-                voxelSizeSlider.getValue(), true, modeCombo.getValue()
+                influenceRadiusSlider.getValue(), true, modeCombo.getValue()
             );
         });
 
         modeCombo.valueProperty().addListener((obs, oldVal, newVal) -> {
             regenerate(
                 Double.valueOf(resolutionSlider.getValue()).intValue(),
-                voxelSizeSlider.getValue(), true, modeCombo.getValue()
+                influenceRadiusSlider.getValue(), true, modeCombo.getValue()
             );
         });        
-
-        // --- Mode Toggle ---
-        ToggleGroup gridModeGroup = new ToggleGroup();
-        RadioButton voxelSizeRadio = new RadioButton("Voxel Size");
-        RadioButton resolutionRadio = new RadioButton("Resolution");
-        voxelSizeRadio.setToggleGroup(gridModeGroup);
-        resolutionRadio.setToggleGroup(gridModeGroup);
-        voxelSizeRadio.setSelected(true); // default        
-        HBox modeBox = new HBox(10, voxelSizeRadio, resolutionRadio);
-        modeBox.setAlignment(Pos.CENTER_LEFT);
 
         HBox box = new HBox(15, 
             new VBox(5, new Label("Isovalue:"), isoSlider),
@@ -234,8 +224,8 @@ System.out.println("Point cloud bounds: " + min + " to " + max);
         );
         HBox box2 = new HBox(15, 
             new VBox(5, new Label("Resolution:"), resolutionSlider),
-            new VBox(5, new Label("Voxel Size:"), voxelSizeSlider),
-            modeBox, modeCombo
+            new VBox(5, new Label("Influence Radius:"), influenceRadiusSlider),
+            modeCombo
         );
         box.setStyle("-fx-padding: 10; -fx-background-color: #303030; -fx-text-fill: white;");
         box2.setStyle("-fx-padding: 10; -fx-background-color: #303030; -fx-text-fill: white;");

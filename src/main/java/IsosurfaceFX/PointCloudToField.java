@@ -99,78 +99,80 @@ public class PointCloudToField {
         );
 
     }
+private void computeSignedDistanceField(VoxelGrid grid) {
+    int dimX = grid.getDimX();
+    int dimY = grid.getDimY();
+    int dimZ = grid.getDimZ();
+    double voxelSize = grid.getVoxelSize();
+    Point3D origin = grid.getOrigin();
 
-    private void computeSignedDistanceField(VoxelGrid grid) {
-        int dimX = grid.getDimX();
-        int dimY = grid.getDimY();
-        int dimZ = grid.getDimZ();
-        double voxelSize = grid.getVoxelSize();
-        Point3D origin = grid.getOrigin();
-
-        // Pre-initialize grid with high values
-        IntStream.range(0, dimX).parallel().forEach(x -> {
-            for (int y = 0; y < dimY; y++) {
-                for (int z = 0; z < dimZ; z++) {
-                    grid.set(x, y, z, Float.POSITIVE_INFINITY);
-                }
+    // Step 1: Initialize all voxels to +∞ (unvisited)
+    IntStream.range(0, dimX).parallel().forEach(x -> {
+        for (int y = 0; y < dimY; y++) {
+            for (int z = 0; z < dimZ; z++) {
+                grid.set(x, y, z, Float.POSITIVE_INFINITY);
             }
-        });
+        }
+    });
 
-        for (Point3D p : pointCloud) {
-            Point3D normal = normalMap.get(p);
-            if (normal == null) {
-                continue;
-            }
+    double maxDist = influenceRadius;
 
-            int cx = (int) ((p.getX() - origin.getX()) / voxelSize);
-            int cy = (int) ((p.getY() - origin.getY()) / voxelSize);
-            int cz = (int) ((p.getZ() - origin.getZ()) / voxelSize);
+    // Step 2: For each point in the cloud
+    pointCloud.parallelStream().forEach(point -> {
+        Point3D normal = normalMap.get(point);
+        if (normal == null) return;
 
-            int influenceCells = (int) Math.ceil(influenceRadius / voxelSize);
+        int centerX = (int) ((point.getX() - origin.getX()) / voxelSize);
+        int centerY = (int) ((point.getY() - origin.getY()) / voxelSize);
+        int centerZ = (int) ((point.getZ() - origin.getZ()) / voxelSize);
+        int radiusInVoxels = (int) Math.ceil(maxDist / voxelSize);
 
-            for (int dx = -influenceCells; dx <= influenceCells; dx++) {
-                int x = cx + dx;
-                if (x < 0 || x >= dimX) {
-                    continue;
-                }
+        // Visit all voxels within the spherical influence zone
+        for (int dx = -radiusInVoxels; dx <= radiusInVoxels; dx++) {
+            int x = centerX + dx;
+            if (x < 0 || x >= dimX) continue;
 
-                for (int dy = -influenceCells; dy <= influenceCells; dy++) {
-                    int y = cy + dy;
-                    if (y < 0 || y >= dimY) {
-                        continue;
-                    }
+            for (int dy = -radiusInVoxels; dy <= radiusInVoxels; dy++) {
+                int y = centerY + dy;
+                if (y < 0 || y >= dimY) continue;
 
-                    for (int dz = -influenceCells; dz <= influenceCells; dz++) {
-                        int z = cz + dz;
-                        if (z < 0 || z >= dimZ) {
-                            continue;
-                        }
+                for (int dz = -radiusInVoxels; dz <= radiusInVoxels; dz++) {
+                    int z = centerZ + dz;
+                    if (z < 0 || z >= dimZ) continue;
 
-                        Point3D voxelCenter = new Point3D(
-                                origin.getX() + x * voxelSize,
-                                origin.getY() + y * voxelSize,
-                                origin.getZ() + z * voxelSize
-                        );
+                    Point3D voxelCenter = new Point3D(
+                        origin.getX() + x * voxelSize,
+                        origin.getY() + y * voxelSize,
+                        origin.getZ() + z * voxelSize
+                    );
 
-                        Point3D offset = voxelCenter.subtract(p);
-                        double distance = offset.magnitude();
+                    Point3D offset = voxelCenter.subtract(point);
+                    double distance = offset.magnitude();
 
-                        // ✅ Only update voxels within the influence radius
-                        if (distance > influenceRadius) {
-                            continue;
-                        }
+                    if (distance > maxDist) continue;
 
-                        float currentValue = grid.get(x, y, z);
-                        if (distance < currentValue) {
-                            double dot = (distance == 0.0) ? 1.0 : offset.normalize().dotProduct(normal);
-                            float signedDistance = (float) (distance * (dot >= 0 ? 1.0 : -1.0));
+                    // Sign the distance based on the dot product with the point normal
+                    double dot = offset.dotProduct(normal);
+                    float signedDistance = (float) (distance * (dot >= 0 ? 1.0 : -1.0));
+
+                    synchronized (grid) {
+                        float current = grid.get(x, y, z);
+                        if (Math.abs(signedDistance) < Math.abs(current)) {
                             grid.set(x, y, z, signedDistance);
                         }
                     }
                 }
             }
         }
-    }
+    });
+}
+
+
+// Utility clamp method
+private double clamp(double value, double min, double max) {
+    return Math.max(min, Math.min(max, value));
+}
+
 
     private void debugCenterValues(VoxelGrid grid) {
         System.out.println("Sample SDF values near center:");
