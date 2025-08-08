@@ -85,21 +85,15 @@ public class Octree {
 
     private Comparator<Integer> distanceComparator(final Point3D point, boolean smallFirst) {
         if (smallFirst)
-            return new Comparator<Integer>() {
-                @Override
-                public int compare(Integer pointIndex1, Integer pointIndex2) {
-                    Point3D p1 = points.get(pointIndex1);
-                    Point3D p2 = points.get(pointIndex2);
-                    return Double.compare(p1.distance(point), p2.distance(point));
-                }
-            };
-        return new Comparator<Integer>() {
-            @Override
-            public int compare(Integer pointIndex1, Integer pointIndex2) {
+            return (Integer pointIndex1, Integer pointIndex2) -> {
                 Point3D p1 = points.get(pointIndex1);
                 Point3D p2 = points.get(pointIndex2);
-                return -Double.compare(p1.distance(point), p2.distance(point));
-            }
+                return Double.compare(p1.distance(point), p2.distance(point));
+        };
+        return (Integer pointIndex1, Integer pointIndex2) -> {
+            Point3D p1 = points.get(pointIndex1);
+            Point3D p2 = points.get(pointIndex2);
+            return -Double.compare(p1.distance(point), p2.distance(point));
         };
     }
 
@@ -150,7 +144,6 @@ public class Octree {
 
         while (queue.size() < k) {
             Set<Long> candidates = new HashSet<>();
-//            determineCandidatesWithinRadius(currentSearchRadius, point, candidates);
             determineCandidatesWithinRadius(searchRange.getRadius(), searchRange.getCenter(), candidates);
             for (Long newNode : candidates) {
                 if (visitedBoxes.contains(newNode)) continue;
@@ -163,16 +156,12 @@ public class Octree {
                     }
                     if (queue.size() > k) queue.poll();
                 }
-//                queue.addAll(octreeIndices.get(newNode).indices);
             }
-//            Collections.sort(queue, comparator);
-//            while (queue.size() > k) queue.remove(queue.size() - 1);
             searchRange.setRadius(searchRange.getRadius() + leafSize);
         }
 
         int[] indices = new int[k];
         for (int i = 0; i < k; i++) {
-//            indices[i] = queue.get(i);
             indices[i] = queue.poll();
         }
         VolumeUtils.reverse(indices);
@@ -253,7 +242,6 @@ public class Octree {
                 return node.index;
             } else {
                 return -1L;
-//                throw new IllegalStateException("Search a point exceeding octree bounds.");
             }
         } else {
             int xi = point.getX() < node.getCenter().getX() ? 0 : 1;
@@ -263,7 +251,6 @@ public class Octree {
             return locateOctreeNode(node.children[childIndex], point);
         }
     }
-
 
     private PriorityQueue<Integer> searchNeighborsInNodes(List<Long> candidateLeaves, final Point3D point) {
         int capacity = 0;
@@ -307,7 +294,6 @@ public class Octree {
             }
         }
         return neighborIndices;
-
     }
 
     /**

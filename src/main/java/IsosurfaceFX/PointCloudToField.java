@@ -12,10 +12,8 @@ import java.util.stream.IntStream;
 
 public class PointCloudToField {
 
-    public enum FieldMode {
-        GAUSSIAN,
-        SDF
-    }
+    public enum FieldMode { GAUSSIAN, SDF, VOXEL_SDF }
+        
     private final List<Point3D> pointCloud;
     private final FieldMode mode;
     private final double influenceRadius;
@@ -30,16 +28,52 @@ public class PointCloudToField {
 
     public void applyTo(VoxelGrid grid) {
         switch (mode) {
+            case VOXEL_SDF -> {
+                computeSignedDistanceFieldVoxelCentric(grid);
+            }
             case GAUSSIAN -> {
                 computeGaussian(grid);
             }
-
             case SDF -> {
                 computeSignedDistanceField(grid);
             }
         }
     }
+private void computeSignedDistanceFieldVoxelCentric(VoxelGrid grid) {
+    int dimX = grid.getDimX();
+    int dimY = grid.getDimY();
+    int dimZ = grid.getDimZ();
+    double voxelSize = grid.getVoxelSize();
+    Point3D origin = grid.getOrigin();
 
+    // Build a spatial index for points (e.g., KD-Tree) for speed!
+    // For demonstration, this is O(N) per voxel
+    for (int x = 0; x < dimX; x++) {
+        for (int y = 0; y < dimY; y++) {
+            for (int z = 0; z < dimZ; z++) {
+                Point3D voxelCenter = new Point3D(
+                        origin.getX() + x * voxelSize,
+                        origin.getY() + y * voxelSize,
+                        origin.getZ() + z * voxelSize
+                );
+
+                double minDist = Double.POSITIVE_INFINITY;
+                double sign = 1.0;
+                Point3D closestNormal = null;
+
+                for (Point3D point : pointCloud) {
+                    double dist = voxelCenter.distance(point);
+                    if (dist < minDist) {
+                        minDist = dist;
+                        closestNormal = normalMap.get(point);
+                        sign = (closestNormal != null && voxelCenter.subtract(point).dotProduct(closestNormal) < 0) ? -1.0 : 1.0;
+                    }
+                }
+                grid.set(x, y, z, (float) (minDist * sign));
+            }
+        }
+    }
+}
     private void computeGaussian(VoxelGrid grid) {
         int dimX = grid.getDimX();
         int dimY = grid.getDimY();

@@ -11,7 +11,6 @@ import javafx.stage.Stage;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import javafx.geometry.Pos;
 import javafx.scene.Camera;
 import javafx.scene.Group;
 import javafx.scene.PerspectiveCamera;
@@ -20,13 +19,10 @@ import javafx.scene.SceneAntialiasing;
 import javafx.scene.SubScene;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
-import javafx.scene.control.RadioButton;
 import javafx.scene.control.Slider;
-import javafx.scene.control.ToggleGroup;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.scene.paint.PhongMaterial;
-import javafx.scene.shape.CullFace;
 import javafx.scene.shape.MeshView;
 import javafx.scene.shape.Sphere;
 import javafx.scene.shape.TriangleMesh;
@@ -114,16 +110,30 @@ VoxelGrid grid = new VoxelGrid.Builder()
             points, mode, influenceRadius, normalMap);
         fieldGenerator.applyTo(grid);     
 
-        MarchingCubes mc = new MarchingCubes(grid, isovalue, true);
-        List<Triangle3D> triangles = mc.generateMesh();
+MarchingCubes mc = new MarchingCubes(grid, isovalue, true);
+MarchingCubes.MeshData meshData = mc.generateMeshData();
+TriangleMesh mesh = toTriangleMesh(meshData);
 
-        TriangleMesh mesh = TriangleMeshConverter.convertToMesh(triangles);
         MeshView meshView = new MeshView(mesh);
 //        meshView.setCullFace(CullFace.NONE);
         meshView.setMaterial(new PhongMaterial(Color.DODGERBLUE));
         meshGroup.getChildren().add(meshView);
     }
-
+public static TriangleMesh toTriangleMesh(MarchingCubes.MeshData meshData) {
+    TriangleMesh mesh = new TriangleMesh();
+    float[] points = new float[meshData.vertices.size() * 3];
+    for (int i = 0; i < meshData.vertices.size(); i++) {
+        Point3D p = meshData.vertices.get(i);
+        points[3 * i] = (float) p.getX();
+        points[3 * i + 1] = (float) p.getY();
+        points[3 * i + 2] = (float) p.getZ();
+    }
+    mesh.getPoints().setAll(points);
+    mesh.getTexCoords().setAll(0, 0); // dummy tex coord
+    int[] faces = meshData.faces.stream().mapToInt(Integer::intValue).toArray();
+    mesh.getFaces().setAll(faces);
+    return mesh;
+}
     private void renderPointCloud(List<Point3D> cloud) {
         for (Point3D pt : cloud) {
             Sphere sphere = new Sphere(0.7);
@@ -138,7 +148,7 @@ VoxelGrid grid = new VoxelGrid.Builder()
     private VBox createControls() {
         double SLIDER_PREF_WIDTH = 650;
         Slider resolutionSlider = new Slider(16, 256, 16);
-        Slider influenceRadiusSlider = new Slider(0.1, 20, 10);        
+        Slider influenceRadiusSlider = new Slider(1, 100, 10);        
         Slider isoSlider = new Slider(-1, 1, isovalue);
         ComboBox<FieldMode> modeCombo = new ComboBox<>();
         modeCombo.getItems().addAll(FieldMode.values());
@@ -189,11 +199,11 @@ VoxelGrid grid = new VoxelGrid.Builder()
 
         influenceRadiusSlider.setShowTickLabels(true);
         influenceRadiusSlider.setShowTickMarks(true);
-        influenceRadiusSlider.setMajorTickUnit(0.1);
+        influenceRadiusSlider.setMajorTickUnit(1);
         influenceRadiusSlider.setSnapToTicks(true);        
         influenceRadiusSlider.setPrefWidth(SLIDER_PREF_WIDTH);
 
-        modeCombo.setValue(FieldMode.SDF);
+        modeCombo.setValue(FieldMode.VOXEL_SDF);
 
         resolutionSlider.valueProperty().addListener((obs, oldVal, newVal) -> {
             resolutionSlider.setValue(newVal.intValue()); 
