@@ -130,7 +130,32 @@ public static void computeDivergenceField(OctreeNode node) {
         int n = points.size();
         return new Point3D(sumX / n, sumY / n, sumZ / n);
     }
-
+   
+public static Map<Point3D, Point3D> smoothNormals(Map<Point3D, Point3D> normalMap, List<Point3D> cloud, int k) {
+    Map<Point3D, Point3D> newNormals = new HashMap<>();
+    for (Point3D p : cloud) {
+        List<Point3D> neighbors = findKNearestNeighbors(p, cloud, k);
+        Point3D normal = normalMap.get(p);
+        if (normal == null) continue;
+        int agree = 0;
+        for (Point3D n : neighbors) {
+            Point3D nn = normalMap.get(n);
+            if (nn != null && normal.dotProduct(nn) > 0) agree++;
+        }
+        if (agree < neighbors.size() / 2) {
+            normal = normal.multiply(-1); // flip if most neighbors disagree
+        }
+        // Optional: average with neighbors for smoothness
+        Point3D avg = normal;
+        for (Point3D n : neighbors) {
+            Point3D nn = normalMap.get(n);
+            if (nn != null) avg = avg.add(nn);
+        }
+        avg = avg.normalize();
+        newNormals.put(p, avg);
+    }
+    return newNormals;
+}
     public static Map<Point3D, Point3D> estimateNormals(List<Point3D> pointCloud, int k) {
         Map<Point3D, Point3D> normalMap = new HashMap<>();
 

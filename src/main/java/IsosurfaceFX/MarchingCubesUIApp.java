@@ -1,16 +1,22 @@
 package IsosurfaceFX;
 
 import IsosurfaceFX.PointCloudToField.FieldMode;
+import com.github.quickhull3d.Point3d;
+import com.github.quickhull3d.QuickHull3D;
 import javafx.application.Application;
-import javafx.geometry.Point3D;
+//import com.github.quickhull3d.Point3d;
+//import com.github.quickhull3d.Face;
+//import quickhull3d.Vertex;
 import javafx.scene.input.ScrollEvent;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.stage.Stage;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import javafx.geometry.Point3D;
 import javafx.scene.Camera;
 import javafx.scene.Group;
 import javafx.scene.PerspectiveCamera;
@@ -52,7 +58,7 @@ public class MarchingCubesUIApp extends Application {
         //Make everything pretty
         String CSS = StyleResourceProvider.getResource("styles.css").toExternalForm();
         scene.getStylesheets().add(CSS);
-        
+
         stage.setScene(scene);
         stage.setTitle("Marching Cubes Visualizer");
         stage.show();
@@ -73,67 +79,157 @@ public class MarchingCubesUIApp extends Application {
         return subScene;
     }
 
-    private void regenerate(int resolution, double influenceRadius, boolean useResolution, FieldMode mode) {
+    public TriangleMesh computeCarvedConcaveHull(List<Point3D> pointCloud, double alpha) {
+        // 1. Convert to QuickHull3D Point3d[]
+        Point3d[] qhPoints = pointCloud.stream()
+                .map(p -> new Point3d(p.getX(), p.getY(), p.getZ()))
+                .toArray(Point3d[]::new);
+
+        // 2. Compute convex hull
+        QuickHull3D hull = new QuickHull3D(qhPoints);
+
+        // 3. Get faces with circumradius ≤ alpha
+        List<int[]> concaveFaces = concaveHullFaces(hull, alpha);
+
+        // 4. Build TriangleMesh for JavaFX
+        return toTriangleMesh(hull.getVertices(), concaveFaces);
+    }
+
+    public TriangleMesh computeMarchingCubes(List<Point3D> points, int resolution, double influenceRadius, FieldMode mode) {
+        Point3D min = PointCloudUtils.computeBoundingBoxMin(points);
+        Point3D max = PointCloudUtils.computeBoundingBoxMax(points);
+//double influenceRadius = 15.0; // or 5.0 for testing
+        double margin = influenceRadius; // or 2.0 if influenceRadius is small
+        Point3D origin = min.subtract(margin, margin, margin);
+        double sizeX = max.getX() - min.getX() + 2 * margin;
+        double sizeY = max.getY() - min.getY() + 2 * margin;
+        double sizeZ = max.getZ() - min.getZ() + 2 * margin;
+
+        VoxelGrid grid = new VoxelGrid.Builder()
+                .pointCloud(points)
+                .margin(margin)
+                .origin(origin)
+                .size(sizeX, sizeY, sizeZ)
+                .resolution(resolution)
+                .build();
+
+//System.out.println("VoxelGrid Origin: " + grid.getOrigin());
+//System.out.println("VoxelGrid Dimensions: " + grid.getDimX() + " x " + grid.getDimY() + " x " + grid.getDimZ());
+//System.out.println("VoxelGrid voxel size: " + grid.getVoxelSize());
+//System.out.println("Point cloud bounds: " + min + " to " + max);
+        int normalsK = 6;
+
+        Map<Point3D, Point3D> normalMap = PointCloudUtils.estimateNormals(points, normalsK);
+        Map<Point3D, Point3D> smoothedNormalMap = PointCloudUtils.smoothNormals(normalMap, points, normalsK);
+
+        PointCloudToField fieldGenerator = new PointCloudToField(
+                points, mode, influenceRadius, smoothedNormalMap);
+        fieldGenerator.applyTo(grid);
+
+        MarchingCubes mc = new MarchingCubes(grid, isovalue, true);
+        MarchingCubes.MeshData meshData = mc.generateMeshData();
+        TriangleMesh mesh = toTriangleMesh(meshData);
+        return mesh;
+    }
+
+    private void regenerate(int resolution, double influenceRadius, boolean useCarvedConvex, FieldMode mode) {
         pointCloudGroup.getChildren().clear();
         meshGroup.getChildren().clear();
 
         List<Point3D> points = generatePointCloud(pointCount, shapeType);
         renderPointCloud(points);
-
-Point3D min = PointCloudUtils.computeBoundingBoxMin(points);
-Point3D max = PointCloudUtils.computeBoundingBoxMax(points);
-//double influenceRadius = 15.0; // or 5.0 for testing
-double margin = influenceRadius; // or 2.0 if influenceRadius is small
-Point3D origin = min.subtract(margin, margin, margin);
-double sizeX = max.getX() - min.getX() + 2 * margin;
-double sizeY = max.getY() - min.getY() + 2 * margin;
-double sizeZ = max.getZ() - min.getZ() + 2 * margin;
-
-VoxelGrid grid = new VoxelGrid.Builder()
-        .pointCloud(points)
-        .margin(margin)
-        .origin(origin)
-        .size(sizeX, sizeY, sizeZ)
-        .resolution(resolution)
-        .build();
-
+        TriangleMesh mesh;
+        if(useCarvedConvex)
+            mesh = computeCarvedConcaveHull(points, influenceRadius);
+        else
+            mesh =computeMarchingCubes(points, resolution, influenceRadius, mode);
         
-//System.out.println("VoxelGrid Origin: " + grid.getOrigin());
-//System.out.println("VoxelGrid Dimensions: " + grid.getDimX() + " x " + grid.getDimY() + " x " + grid.getDimZ());
-//System.out.println("VoxelGrid voxel size: " + grid.getVoxelSize());
-//System.out.println("Point cloud bounds: " + min + " to " + max);
-
-
-        Map<Point3D, Point3D> normalMap = PointCloudUtils.estimateNormals(points, 12);
-        
-        PointCloudToField fieldGenerator = new PointCloudToField(
-            points, mode, influenceRadius, normalMap);
-        fieldGenerator.applyTo(grid);     
-
-MarchingCubes mc = new MarchingCubes(grid, isovalue, true);
-MarchingCubes.MeshData meshData = mc.generateMeshData();
-TriangleMesh mesh = toTriangleMesh(meshData);
-
         MeshView meshView = new MeshView(mesh);
 //        meshView.setCullFace(CullFace.NONE);
         meshView.setMaterial(new PhongMaterial(Color.DODGERBLUE));
         meshGroup.getChildren().add(meshView);
     }
-public static TriangleMesh toTriangleMesh(MarchingCubes.MeshData meshData) {
-    TriangleMesh mesh = new TriangleMesh();
-    float[] points = new float[meshData.vertices.size() * 3];
-    for (int i = 0; i < meshData.vertices.size(); i++) {
-        Point3D p = meshData.vertices.get(i);
-        points[3 * i] = (float) p.getX();
-        points[3 * i + 1] = (float) p.getY();
-        points[3 * i + 2] = (float) p.getZ();
+
+    public static List<int[]> concaveHullFaces(QuickHull3D hull, double alpha) {
+        // Get all hull vertices and all faces (as vertex indices)
+        Point3d[] points = hull.getVertices();
+        int[][] faces = hull.getFaces();
+
+        List<int[]> concaveFaces = new ArrayList<>();
+
+        for (int[] face : faces) {
+            Point3d a = points[face[0]];
+            Point3d b = points[face[1]];
+            Point3d c = points[face[2]];
+
+            double r = getTriangleCircumradius(a, b, c);
+            if (r <= alpha) {
+                concaveFaces.add(face);
+            }
+        }
+        return concaveFaces;
     }
-    mesh.getPoints().setAll(points);
-    mesh.getTexCoords().setAll(0, 0); // dummy tex coord
-    int[] faces = meshData.faces.stream().mapToInt(Integer::intValue).toArray();
-    mesh.getFaces().setAll(faces);
-    return mesh;
-}
+
+    public static double getTriangleCircumradius(Point3d a, Point3d b, Point3d c) {
+        double ab = a.distance(b);
+        double bc = b.distance(c);
+        double ca = c.distance(a);
+        double s = (ab + bc + ca) / 2.0;
+        double area = Math.sqrt(s * (s - ab) * (s - bc) * (s - ca));
+        if (area == 0) {
+            return Double.POSITIVE_INFINITY;
+        }
+        return (ab * bc * ca) / (4.0 * area);
+    }
+
+    public static TriangleMesh toTriangleMesh(Point3d[] vertices, List<int[]> faces) {
+        TriangleMesh mesh = new TriangleMesh();
+
+        // Convert points to float array for JavaFX
+        float[] points = new float[vertices.length * 3];
+        for (int i = 0; i < vertices.length; i++) {
+            points[3 * i] = (float) vertices[i].x;
+            points[3 * i + 1] = (float) vertices[i].y;
+            points[3 * i + 2] = (float) vertices[i].z;
+        }
+        mesh.getPoints().setAll(points);
+
+        // JavaFX requires at least one texture coordinate (not used here)
+        mesh.getTexCoords().setAll(0, 0);
+
+        // Assemble face indices (each triangle = 3 vertex/tex pairs)
+        List<Integer> facesList = new ArrayList<>();
+        for (int[] face : faces) {
+            // JavaFX expects counterclockwise winding, so use 0-2-1 order if hull gives 0-1-2
+            facesList.add(face[0]);
+            facesList.add(0);
+            facesList.add(face[2]);
+            facesList.add(0);
+            facesList.add(face[1]);
+            facesList.add(0);
+        }
+        int[] facesArr = facesList.stream().mapToInt(Integer::intValue).toArray();
+        mesh.getFaces().setAll(facesArr);
+
+        return mesh;
+    }
+
+    public static TriangleMesh toTriangleMesh(MarchingCubes.MeshData meshData) {
+        TriangleMesh mesh = new TriangleMesh();
+        float[] points = new float[meshData.vertices.size() * 3];
+        for (int i = 0; i < meshData.vertices.size(); i++) {
+            Point3D p = meshData.vertices.get(i);
+            points[3 * i] = (float) p.getX();
+            points[3 * i + 1] = (float) p.getY();
+            points[3 * i + 2] = (float) p.getZ();
+        }
+        mesh.getPoints().setAll(points);
+        mesh.getTexCoords().setAll(0, 0); // dummy tex coord
+        int[] faces = meshData.faces.stream().mapToInt(Integer::intValue).toArray();
+        mesh.getFaces().setAll(faces);
+        return mesh;
+    }
+
     private void renderPointCloud(List<Point3D> cloud) {
         for (Point3D pt : cloud) {
             Sphere sphere = new Sphere(0.7);
@@ -148,12 +244,12 @@ public static TriangleMesh toTriangleMesh(MarchingCubes.MeshData meshData) {
     private VBox createControls() {
         double SLIDER_PREF_WIDTH = 650;
         Slider resolutionSlider = new Slider(16, 256, 16);
-        Slider influenceRadiusSlider = new Slider(1, 100, 10);        
+        Slider influenceRadiusSlider = new Slider(1, 100, 10);
         Slider isoSlider = new Slider(-1, 1, isovalue);
         ComboBox<FieldMode> modeCombo = new ComboBox<>();
         modeCombo.getItems().addAll(FieldMode.values());
         modeCombo.getSelectionModel().selectFirst();
-        
+
         isoSlider.setShowTickLabels(true);
         isoSlider.setShowTickMarks(true);
         isoSlider.setMajorTickUnit(0.1);
@@ -162,8 +258,8 @@ public static TriangleMesh toTriangleMesh(MarchingCubes.MeshData meshData) {
         isoSlider.valueProperty().addListener((obs, old, val) -> {
             isovalue = val.doubleValue();
             regenerate(
-                Double.valueOf(resolutionSlider.getValue()).intValue(),
-                influenceRadiusSlider.getValue(), true, modeCombo.getValue()
+                    Double.valueOf(resolutionSlider.getValue()).intValue(),
+                    influenceRadiusSlider.getValue(), true, modeCombo.getValue()
             );
         });
         Slider countSlider = new Slider(100, 3000, pointCount);
@@ -173,8 +269,8 @@ public static TriangleMesh toTriangleMesh(MarchingCubes.MeshData meshData) {
         countSlider.valueProperty().addListener((obs, old, val) -> {
             pointCount = val.intValue();
             regenerate(
-                Double.valueOf(resolutionSlider.getValue()).intValue(),
-                influenceRadiusSlider.getValue(), true, modeCombo.getValue()
+                    Double.valueOf(resolutionSlider.getValue()).intValue(),
+                    influenceRadiusSlider.getValue(), true, modeCombo.getValue()
             );
         });
 
@@ -185,11 +281,11 @@ public static TriangleMesh toTriangleMesh(MarchingCubes.MeshData meshData) {
         shapeSelector.valueProperty().addListener((obs, old, val) -> {
             shapeType = val;
             regenerate(
-                Double.valueOf(resolutionSlider.getValue()).intValue(),
-                influenceRadiusSlider.getValue(), true, modeCombo.getValue()
+                    Double.valueOf(resolutionSlider.getValue()).intValue(),
+                    influenceRadiusSlider.getValue(), true, modeCombo.getValue()
             );
         });
-        
+
         resolutionSlider.setShowTickLabels(true);
         resolutionSlider.setShowTickMarks(true);
         resolutionSlider.setMajorTickUnit(32);
@@ -200,42 +296,42 @@ public static TriangleMesh toTriangleMesh(MarchingCubes.MeshData meshData) {
         influenceRadiusSlider.setShowTickLabels(true);
         influenceRadiusSlider.setShowTickMarks(true);
         influenceRadiusSlider.setMajorTickUnit(1);
-        influenceRadiusSlider.setSnapToTicks(true);        
+        influenceRadiusSlider.setSnapToTicks(true);
         influenceRadiusSlider.setPrefWidth(SLIDER_PREF_WIDTH);
 
         modeCombo.setValue(FieldMode.VOXEL_SDF);
 
         resolutionSlider.valueProperty().addListener((obs, oldVal, newVal) -> {
-            resolutionSlider.setValue(newVal.intValue()); 
+            resolutionSlider.setValue(newVal.intValue());
             regenerate(
-                Double.valueOf(resolutionSlider.getValue()).intValue(),
-                influenceRadiusSlider.getValue(), true, modeCombo.getValue()
+                    Double.valueOf(resolutionSlider.getValue()).intValue(),
+                    influenceRadiusSlider.getValue(), true, modeCombo.getValue()
             );
         });
 
         influenceRadiusSlider.valueProperty().addListener((obs, oldVal, newVal) -> {
             regenerate(
-                Double.valueOf(resolutionSlider.getValue()).intValue(),
-                influenceRadiusSlider.getValue(), true, modeCombo.getValue()
+                    Double.valueOf(resolutionSlider.getValue()).intValue(),
+                    influenceRadiusSlider.getValue(), true, modeCombo.getValue()
             );
         });
 
         modeCombo.valueProperty().addListener((obs, oldVal, newVal) -> {
             regenerate(
-                Double.valueOf(resolutionSlider.getValue()).intValue(),
-                influenceRadiusSlider.getValue(), true, modeCombo.getValue()
+                    Double.valueOf(resolutionSlider.getValue()).intValue(),
+                    influenceRadiusSlider.getValue(), true, modeCombo.getValue()
             );
-        });        
+        });
 
-        HBox box = new HBox(15, 
-            new VBox(5, new Label("Isovalue:"), isoSlider),
-            new VBox(5, new Label("Points:"), countSlider),
-            new VBox(5, new Label("Shape:"), shapeSelector)
+        HBox box = new HBox(15,
+                new VBox(5, new Label("Isovalue:"), isoSlider),
+                new VBox(5, new Label("Points:"), countSlider),
+                new VBox(5, new Label("Shape:"), shapeSelector)
         );
-        HBox box2 = new HBox(15, 
-            new VBox(5, new Label("Resolution:"), resolutionSlider),
-            new VBox(5, new Label("Influence Radius:"), influenceRadiusSlider),
-            modeCombo
+        HBox box2 = new HBox(15,
+                new VBox(5, new Label("Resolution:"), resolutionSlider),
+                new VBox(5, new Label("Influence Radius:"), influenceRadiusSlider),
+                modeCombo
         );
         box.setStyle("-fx-padding: 10; -fx-background-color: #303030; -fx-text-fill: white;");
         box2.setStyle("-fx-padding: 10; -fx-background-color: #303030; -fx-text-fill: white;");
