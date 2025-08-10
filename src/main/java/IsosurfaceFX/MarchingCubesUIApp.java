@@ -47,6 +47,7 @@ public class MarchingCubesUIApp extends Application {
     private double isovalue = 0.0;
     private int pointCount = 150;
     private String shapeType = "sphere";
+    private SurfaceMode surfaceMode = SurfaceMode.MARCHING_CUBES;
 
     @Override
     public void start(Stage stage) {
@@ -95,7 +96,8 @@ public class MarchingCubesUIApp extends Application {
         return toTriangleMesh(hull.getVertices(), concaveFaces);
     }
 
-    public TriangleMesh computeMarchingCubes(List<Point3D> points, int resolution, double influenceRadius, FieldMode mode) {
+    public TriangleMesh computeMarchingCubes(List<Point3D> points, int resolution, 
+        double influenceRadius, FieldMode mode) {
         Point3D min = PointCloudUtils.computeBoundingBoxMin(points);
         Point3D max = PointCloudUtils.computeBoundingBoxMax(points);
 //double influenceRadius = 15.0; // or 5.0 for testing
@@ -131,24 +133,63 @@ public class MarchingCubesUIApp extends Application {
         TriangleMesh mesh = toTriangleMesh(meshData);
         return mesh;
     }
+    
+public TriangleMesh computeMarchingTetrahedra(List<Point3D> points, int resolution,
+        double influenceRadius, FieldMode mode) {
+    Point3D min = PointCloudUtils.computeBoundingBoxMin(points);
+    Point3D max = PointCloudUtils.computeBoundingBoxMax(points);
+    double margin = influenceRadius;
+    Point3D origin = min.subtract(margin, margin, margin);
+    double sizeX = max.getX() - min.getX() + 2 * margin;
+    double sizeY = max.getY() - min.getY() + 2 * margin;
+    double sizeZ = max.getZ() - min.getZ() + 2 * margin;
 
-    private void regenerate(int resolution, double influenceRadius, boolean useCarvedConvex, FieldMode mode) {
-        pointCloudGroup.getChildren().clear();
-        meshGroup.getChildren().clear();
+    VoxelGrid grid = new VoxelGrid.Builder()
+            .pointCloud(points)
+            .margin(margin)
+            .origin(origin)
+            .size(sizeX, sizeY, sizeZ)
+            .resolution(resolution)
+            .build();
 
-        List<Point3D> points = generatePointCloud(pointCount, shapeType);
-        renderPointCloud(points);
-        TriangleMesh mesh;
-        if(useCarvedConvex)
+    int normalsK = 6;
+    Map<Point3D, Point3D> normalMap = PointCloudUtils.estimateNormals(points, normalsK);
+    Map<Point3D, Point3D> smoothedNormalMap = PointCloudUtils.smoothNormals(normalMap, points, normalsK);
+
+    PointCloudToField fieldGenerator = new PointCloudToField(
+            points, mode, influenceRadius, smoothedNormalMap);
+    fieldGenerator.applyTo(grid);
+
+    MarchingTetrahedra mt = new MarchingTetrahedra(grid, isovalue, true);
+    return mt.generateMesh();
+}
+
+private void regenerate(int resolution, double influenceRadius, FieldMode mode) {
+    pointCloudGroup.getChildren().clear();
+    meshGroup.getChildren().clear();
+
+    List<Point3D> points = generatePointCloud(pointCount, shapeType);
+    renderPointCloud(points);
+
+    TriangleMesh mesh = null;
+    switch (surfaceMode) {
+        case CARVED_CONCAVE_HULL:
             mesh = computeCarvedConcaveHull(points, influenceRadius);
-        else
-            mesh =computeMarchingCubes(points, resolution, influenceRadius, mode);
-        
-        MeshView meshView = new MeshView(mesh);
-//        meshView.setCullFace(CullFace.NONE);
-        meshView.setMaterial(new PhongMaterial(Color.DODGERBLUE));
-        meshGroup.getChildren().add(meshView);
+            break;
+        case MARCHING_TETRAHEDRA:
+            mesh = computeMarchingTetrahedra(points, resolution, influenceRadius, mode);
+            break;
+        case MARCHING_CUBES:
+        default:
+            mesh = computeMarchingCubes(points, resolution, influenceRadius, mode);
+            break;
+        // Add DELAUNAY_ALPHA_SHAPE here when ready
     }
+
+    MeshView meshView = new MeshView(mesh);
+    meshView.setMaterial(new PhongMaterial(Color.DODGERBLUE));
+    meshGroup.getChildren().add(meshView);
+}
 
     public static List<int[]> concaveHullFaces(QuickHull3D hull, double alpha) {
         // Get all hull vertices and all faces (as vertex indices)
@@ -242,7 +283,7 @@ public class MarchingCubesUIApp extends Application {
     }
 
     private VBox createControls() {
-        double SLIDER_PREF_WIDTH = 650;
+        double SLIDER_PREF_WIDTH = 550;
         Slider resolutionSlider = new Slider(16, 256, 16);
         Slider influenceRadiusSlider = new Slider(1, 100, 10);
         Slider isoSlider = new Slider(-1, 1, isovalue);
@@ -259,7 +300,7 @@ public class MarchingCubesUIApp extends Application {
             isovalue = val.doubleValue();
             regenerate(
                     Double.valueOf(resolutionSlider.getValue()).intValue(),
-                    influenceRadiusSlider.getValue(), true, modeCombo.getValue()
+                    influenceRadiusSlider.getValue(), modeCombo.getValue()
             );
         });
         Slider countSlider = new Slider(100, 3000, pointCount);
@@ -270,7 +311,7 @@ public class MarchingCubesUIApp extends Application {
             pointCount = val.intValue();
             regenerate(
                     Double.valueOf(resolutionSlider.getValue()).intValue(),
-                    influenceRadiusSlider.getValue(), true, modeCombo.getValue()
+                    influenceRadiusSlider.getValue(), modeCombo.getValue()
             );
         });
 
@@ -282,9 +323,13 @@ public class MarchingCubesUIApp extends Application {
             shapeType = val;
             regenerate(
                     Double.valueOf(resolutionSlider.getValue()).intValue(),
-                    influenceRadiusSlider.getValue(), true, modeCombo.getValue()
+                    influenceRadiusSlider.getValue(), modeCombo.getValue()
             );
         });
+        
+        ComboBox<SurfaceMode> surfaceModeCombo = new ComboBox<>();
+        surfaceModeCombo.getItems().addAll(SurfaceMode.values());
+        surfaceModeCombo.setValue(SurfaceMode.MARCHING_CUBES);        
 
         resolutionSlider.setShowTickLabels(true);
         resolutionSlider.setShowTickMarks(true);
@@ -305,33 +350,42 @@ public class MarchingCubesUIApp extends Application {
             resolutionSlider.setValue(newVal.intValue());
             regenerate(
                     Double.valueOf(resolutionSlider.getValue()).intValue(),
-                    influenceRadiusSlider.getValue(), true, modeCombo.getValue()
+                    influenceRadiusSlider.getValue(), modeCombo.getValue()
             );
         });
 
         influenceRadiusSlider.valueProperty().addListener((obs, oldVal, newVal) -> {
             regenerate(
                     Double.valueOf(resolutionSlider.getValue()).intValue(),
-                    influenceRadiusSlider.getValue(), true, modeCombo.getValue()
+                    influenceRadiusSlider.getValue(), modeCombo.getValue()
             );
         });
 
         modeCombo.valueProperty().addListener((obs, oldVal, newVal) -> {
             regenerate(
                     Double.valueOf(resolutionSlider.getValue()).intValue(),
-                    influenceRadiusSlider.getValue(), true, modeCombo.getValue()
+                    influenceRadiusSlider.getValue(), modeCombo.getValue()
             );
         });
-
+        
+        surfaceModeCombo.valueProperty().addListener((obs, oldVal, newVal) -> {
+            surfaceMode = newVal;
+            regenerate(
+                    Double.valueOf(resolutionSlider.getValue()).intValue(),
+                    influenceRadiusSlider.getValue(), modeCombo.getValue()
+            );
+        });
         HBox box = new HBox(15,
                 new VBox(5, new Label("Isovalue:"), isoSlider),
                 new VBox(5, new Label("Points:"), countSlider),
                 new VBox(5, new Label("Shape:"), shapeSelector)
         );
+        
         HBox box2 = new HBox(15,
                 new VBox(5, new Label("Resolution:"), resolutionSlider),
                 new VBox(5, new Label("Influence Radius:"), influenceRadiusSlider),
-                modeCombo
+                new VBox(5, new Label("Surface Mode:"), surfaceModeCombo),
+                new VBox(5, new Label("Point Field Mode:"), modeCombo)
         );
         box.setStyle("-fx-padding: 10; -fx-background-color: #303030; -fx-text-fill: white;");
         box2.setStyle("-fx-padding: 10; -fx-background-color: #303030; -fx-text-fill: white;");
