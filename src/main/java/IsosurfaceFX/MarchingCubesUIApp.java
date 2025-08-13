@@ -1,5 +1,6 @@
 package IsosurfaceFX;
 
+import static IsosurfaceFX.MeshUtils.concaveHullFaces;
 import IsosurfaceFX.PointCloudToField.FieldMode;
 import com.github.quickhull3d.Point3d;
 import com.github.quickhull3d.QuickHull3D;
@@ -29,6 +30,7 @@ import javafx.scene.control.Slider;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.scene.paint.PhongMaterial;
+import javafx.scene.shape.CullFace;
 import javafx.scene.shape.MeshView;
 import javafx.scene.shape.Sphere;
 import javafx.scene.shape.TriangleMesh;
@@ -93,7 +95,7 @@ public class MarchingCubesUIApp extends Application {
         List<int[]> concaveFaces = concaveHullFaces(hull, alpha);
 
         // 4. Build TriangleMesh for JavaFX
-        return toTriangleMesh(hull.getVertices(), concaveFaces);
+        return MeshUtils.toTriangleMesh(hull.getVertices(), concaveFaces);
     }
 
     public TriangleMesh computeMarchingCubes(List<Point3D> points, int resolution, 
@@ -187,73 +189,10 @@ private void regenerate(int resolution, double influenceRadius, FieldMode mode) 
     }
 
     MeshView meshView = new MeshView(mesh);
+    meshView.setCullFace(CullFace.NONE);
     meshView.setMaterial(new PhongMaterial(Color.DODGERBLUE));
     meshGroup.getChildren().add(meshView);
 }
-
-    public static List<int[]> concaveHullFaces(QuickHull3D hull, double alpha) {
-        // Get all hull vertices and all faces (as vertex indices)
-        Point3d[] points = hull.getVertices();
-        int[][] faces = hull.getFaces();
-
-        List<int[]> concaveFaces = new ArrayList<>();
-
-        for (int[] face : faces) {
-            Point3d a = points[face[0]];
-            Point3d b = points[face[1]];
-            Point3d c = points[face[2]];
-
-            double r = getTriangleCircumradius(a, b, c);
-            if (r <= alpha) {
-                concaveFaces.add(face);
-            }
-        }
-        return concaveFaces;
-    }
-
-    public static double getTriangleCircumradius(Point3d a, Point3d b, Point3d c) {
-        double ab = a.distance(b);
-        double bc = b.distance(c);
-        double ca = c.distance(a);
-        double s = (ab + bc + ca) / 2.0;
-        double area = Math.sqrt(s * (s - ab) * (s - bc) * (s - ca));
-        if (area == 0) {
-            return Double.POSITIVE_INFINITY;
-        }
-        return (ab * bc * ca) / (4.0 * area);
-    }
-
-    public static TriangleMesh toTriangleMesh(Point3d[] vertices, List<int[]> faces) {
-        TriangleMesh mesh = new TriangleMesh();
-
-        // Convert points to float array for JavaFX
-        float[] points = new float[vertices.length * 3];
-        for (int i = 0; i < vertices.length; i++) {
-            points[3 * i] = (float) vertices[i].x;
-            points[3 * i + 1] = (float) vertices[i].y;
-            points[3 * i + 2] = (float) vertices[i].z;
-        }
-        mesh.getPoints().setAll(points);
-
-        // JavaFX requires at least one texture coordinate (not used here)
-        mesh.getTexCoords().setAll(0, 0);
-
-        // Assemble face indices (each triangle = 3 vertex/tex pairs)
-        List<Integer> facesList = new ArrayList<>();
-        for (int[] face : faces) {
-            // JavaFX expects counterclockwise winding, so use 0-2-1 order if hull gives 0-1-2
-            facesList.add(face[0]);
-            facesList.add(0);
-            facesList.add(face[2]);
-            facesList.add(0);
-            facesList.add(face[1]);
-            facesList.add(0);
-        }
-        int[] facesArr = facesList.stream().mapToInt(Integer::intValue).toArray();
-        mesh.getFaces().setAll(facesArr);
-
-        return mesh;
-    }
 
     public static TriangleMesh toTriangleMesh(MarchingCubes.MeshData meshData) {
         TriangleMesh mesh = new TriangleMesh();
