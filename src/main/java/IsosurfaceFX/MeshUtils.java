@@ -9,6 +9,7 @@ import com.github.quickhull3d.QuickHull3D;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Arrays;
+import java.util.Collections;
 import javafx.scene.shape.TriangleMesh;
 
 public final class MeshUtils {
@@ -107,7 +108,18 @@ public final class MeshUtils {
         Arrays.fill(groups, 1);
         return groups;
     }
-
+public static double medianHullEdgeLength(Point3d[] verts, int[][] faces) {
+    List<Double> L = new ArrayList<>();
+    for (int[] f : faces) {
+        int a=f[0], b=f[1], c=f[2];
+        L.add(verts[a].distance(verts[b]));
+        L.add(verts[b].distance(verts[c]));
+        L.add(verts[c].distance(verts[a]));
+    }
+    Collections.sort(L);
+    int n = L.size();
+    return (n%2==1) ? L.get(n/2) : 0.5*(L.get(n/2-1)+L.get(n/2));
+}
     public static List<int[]> concaveHullFaces(QuickHull3D hull, double alpha) {
         // Get all hull vertices and all faces (as vertex indices)
         Point3d[] points = hull.getVertices();

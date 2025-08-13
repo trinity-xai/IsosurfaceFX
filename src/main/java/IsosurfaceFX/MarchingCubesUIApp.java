@@ -1,20 +1,16 @@
 package IsosurfaceFX;
 
 import static IsosurfaceFX.MeshUtils.concaveHullFaces;
+import static IsosurfaceFX.MeshUtils.medianHullEdgeLength;
 import IsosurfaceFX.PointCloudToField.FieldMode;
 import com.github.quickhull3d.Point3d;
 import com.github.quickhull3d.QuickHull3D;
 import javafx.application.Application;
-//import com.github.quickhull3d.Point3d;
-//import com.github.quickhull3d.Face;
-//import quickhull3d.Vertex;
 import javafx.scene.input.ScrollEvent;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.stage.Stage;
-
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import javafx.geometry.Point3D;
@@ -92,7 +88,12 @@ public class MarchingCubesUIApp extends Application {
         QuickHull3D hull = new QuickHull3D(qhPoints);
 
         // 3. Get faces with circumradius ≤ alpha
-        List<int[]> concaveFaces = concaveHullFaces(hull, alpha);
+        Point3d[] H = hull.getVertices();
+        int[][] F = hull.getFaces();
+        double med = medianHullEdgeLength(H, F);
+        double alphaDog = alpha + med;  
+
+        List<int[]> concaveFaces  = concaveHullFaces(hull, alphaDog);
 
         // 4. Build TriangleMesh for JavaFX
         return MeshUtils.toTriangleMesh(hull.getVertices(), concaveFaces);
