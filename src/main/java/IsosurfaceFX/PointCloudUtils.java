@@ -1,5 +1,7 @@
 package IsosurfaceFX;
 
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
@@ -13,6 +15,80 @@ import javafx.geometry.Point3D;
  */
 public class PointCloudUtils {
     private enum Axis { X, Y, Z }
+/**
+ * Heuristic: a volumetric cloud has many points away from the outer shell.
+ * We shrink the bounding box by 20% on each side and see how many points
+ * lie inside that inner box. If the fraction is big, call it volumetric.
+ */
+private static boolean isLikelyVolumetric(List<Point3D> pts) {
+    if (pts.isEmpty()) return false;
+    Point3D min = PointCloudUtils.computeBoundingBoxMin(pts);
+    Point3D max = PointCloudUtils.computeBoundingBoxMax(pts);
+    double sx = max.getX() - min.getX();
+    double sy = max.getY() - min.getY();
+    double sz = max.getZ() - min.getZ();
+
+    // shrink 20% per side → inner box is 60% of each dimension
+    double shrink = 0.2;
+    double ix0 = min.getX() + shrink * sx, ix1 = max.getX() - shrink * sx;
+    double iy0 = min.getY() + shrink * sy, iy1 = max.getY() - shrink * sy;
+    double iz0 = min.getZ() + shrink * sz, iz1 = max.getZ() - shrink * sz;
+
+    int inside = 0;
+    for (Point3D p : pts) {
+        if (p.getX() >= ix0 && p.getX() <= ix1 &&
+            p.getY() >= iy0 && p.getY() <= iy1 &&
+            p.getZ() >= iz0 && p.getZ() <= iz1) {
+            inside++;
+        }
+    }
+    double fracInside = inside / (double) pts.size();
+
+    // Tunable threshold: if >30% of points are deep inside, treat as volumetric
+    return fracInside > 0.30;
+}    
+// Keep points likely on the outer surface by using kNN spacing.
+// For uniform volumes, surface points have LARGER avg kNN distance (fewer neighbors outside).
+public static List<Point3D> extractSurfacePoints(List<Point3D> pts, int k, double keepTopPercent) {
+    // naive O(n^2) kNN is OK for interactive sizes; replace by grid/kd-tree later
+    int n = pts.size();
+    double[] scores = new double[n];
+
+    for (int i = 0; i < n; i++) {
+        Point3D pi = pts.get(i);
+        // collect distances
+        double[] dists = new double[Math.min(k, n-1)];
+        int di = 0;
+        for (int j = 0; j < n; j++) {
+            if (j == i) continue;
+            double d = pi.distance(pts.get(j));
+            // insert into small array (partial selection)
+            if (di < dists.length) {
+                dists[di++] = d;
+                if (di == dists.length) Arrays.sort(dists);
+            } else if (d < dists[dists.length-1]) {
+                dists[dists.length-1] = d;
+                Arrays.sort(dists);
+            }
+        }
+        // score = mean of k nearest distances
+        double sum = 0.0;
+        for (double d : dists) sum += d;
+        scores[i] = (di > 0) ? (sum / di) : 0.0;
+    }
+
+    // keep the top P% largest scores
+    double[] sorted = scores.clone();
+    Arrays.sort(sorted);
+    int cutIdx = (int)Math.floor((1.0 - keepTopPercent) * (sorted.length-1));
+    double thresh = sorted[Math.max(0, Math.min(sorted.length-1, cutIdx))];
+
+    List<Point3D> out = new ArrayList<>();
+    for (int i = 0; i < n; i++) {
+        if (scores[i] >= thresh) out.add(pts.get(i));
+    }
+    return out;
+}    
     public static void accumulateNormalsIntoOctree(
             OctreeNode root,
             List<Point3D> points,

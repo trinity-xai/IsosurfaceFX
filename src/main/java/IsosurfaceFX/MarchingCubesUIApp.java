@@ -27,6 +27,7 @@ import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.scene.paint.PhongMaterial;
 import javafx.scene.shape.CullFace;
+import javafx.scene.shape.DrawMode;
 import javafx.scene.shape.MeshView;
 import javafx.scene.shape.Sphere;
 import javafx.scene.shape.TriangleMesh;
@@ -45,7 +46,7 @@ public class MarchingCubesUIApp extends Application {
     private double isovalue = 0.0;
     private int pointCount = 150;
     private String shapeType = "sphere";
-    private SurfaceMode surfaceMode = SurfaceMode.MARCHING_CUBES;
+    private SurfaceMode surfaceMode = SurfaceMode.CARVED_CONCAVE_HULL;
 
     @Override
     public void start(Stage stage) {
@@ -77,6 +78,95 @@ public class MarchingCubesUIApp extends Application {
         addMouseControls(subScene, camera);
         return subScene;
     }
+//public TriangleMesh computeContractionConcaveHull(List<Point3D> pointCloud, double influenceRadius) {
+//    // --- Convex hull from your existing dependency ---
+//    Point3d[] qhPoints = pointCloud.stream()
+//            .map(p -> new Point3d(p.getX(), p.getY(), p.getZ()))
+//            .toArray(Point3d[]::new);
+//    QuickHull3D hull = new QuickHull3D(qhPoints);
+//
+//    // Map hull vertices back to original indices (ε-match is fine for generated clouds)
+//    Point3d[] Hverts = hull.getVertices();
+//    int[][] Hfaces = hull.getFaces();
+//    int[] hullToInput = mapHullVertsToInputIndices(Hverts, pointCloud, 1e-9);
+//
+//    // Triangulate hull faces to int[3] in input-index space
+//    List<int[]> faces = triangulateFacesUsingMap(Hfaces, hullToInput);
+//
+//    // Mark which input points already lie on hull
+//    int n = pointCloud.size();
+//    boolean[] onSurface = new boolean[n];
+//    for (int[] f : faces) onSurface[f[0]] = onSurface[f[1]] = onSurface[f[2]] = true;
+//
+//    // Seed interior list and a PQ ordered by distance to nearest facet
+//    List<Integer> interior = new ArrayList<>();
+//    for (int i = 0; i < n; i++) if (!onSurface[i]) interior.add(i);
+//
+//    if (interior.isEmpty()) {
+//        return MeshUtils.toTriangleMesh(pointCloud, faces);
+//    }
+//
+//    // Practical “radius of influence” (your UI’s slider): cap how far a point can attach.
+//    // A mild additive of the hull’s median edge length stabilizes early steps on coarse hulls.
+//    double med = medianHullEdgeLength(Hverts, Hfaces);    // you already have this
+//    final double maxAttachDist = Math.max(1e-6, influenceRadius + 0.5 * med);
+//
+//    PriorityQueue<Candidate> Q = new PriorityQueue<>(Comparator.comparingDouble(c -> c.dist));
+//    for (int pi : interior) {
+//        NearestFacet nf = nearestFacet(pi, pointCloud, faces);
+//        if (nf != null) Q.add(new Candidate(pi, nf.fIndex, nf.dist));
+//    }
+//
+//    // Iterate: choose closest point→facet; replace that facet with 3 triangles including the point
+//    final int maxIters = Math.min(n * 5, 20000);
+//    int it = 0;
+//    while (!Q.isEmpty() && it++ < maxIters) {
+//        Candidate c = Q.poll();
+//        if (onSurface[c.pi]) continue;
+//
+//        // Refresh because faces changed
+//        NearestFacet nf = nearestFacet(c.pi, pointCloud, faces);
+//        if (nf == null) continue;
+//        if (nf.dist > maxAttachDist) continue;
+//
+//        int[] F = faces.get(nf.fIndex);
+//        Point3D A = pointCloud.get(F[0]);
+//        Point3D B = pointCloud.get(F[1]);
+//        Point3D C = pointCloud.get(F[2]);
+//        Point3D P = pointCloud.get(c.pi);
+//
+//        // Attach only from the “outside” side of the facet (keeps surface closed)
+//        if (!isOutsideFacet(P, A, B, C)) continue;  // simple normal-side test
+//
+//        // Build proposal (pyramid) and do a quick local intersection guard
+//        int[][] proposal = new int[][]{
+//            new int[]{F[0], F[1], c.pi},
+//            new int[]{F[1], F[2], c.pi},
+//            new int[]{F[2], F[0], c.pi}
+//        };
+//        if (introducesIntersectionsQuick(pointCloud, proposal, faces, nf.fIndex)) {
+//            continue;
+//        }
+//
+//        // Commit: remove facet; add 3 new ones
+//        faces.remove(nf.fIndex);
+//        faces.add(proposal[0]);
+//        faces.add(proposal[1]);
+//        faces.add(proposal[2]);
+//        onSurface[c.pi] = true;
+//
+//        // Rebuild the queue for remaining interior points (simple & safe; optimize later)
+//        Q.clear();
+//        for (int pi : interior) {
+//            if (!onSurface[pi]) {
+//                NearestFacet nf2 = nearestFacet(pi, pointCloud, faces);
+//                if (nf2 != null) Q.add(new Candidate(pi, nf2.fIndex, nf2.dist));
+//            }
+//        }
+//    }
+//
+//    return MeshUtils.toTriangleMesh(pointCloud, faces);
+//}
 
     public TriangleMesh computeCarvedConcaveHull(List<Point3D> pointCloud, double alpha) {
         // 1. Convert to QuickHull3D Point3d[]
@@ -103,8 +193,7 @@ public class MarchingCubesUIApp extends Application {
         double influenceRadius, FieldMode mode) {
         Point3D min = PointCloudUtils.computeBoundingBoxMin(points);
         Point3D max = PointCloudUtils.computeBoundingBoxMax(points);
-//double influenceRadius = 15.0; // or 5.0 for testing
-        double margin = influenceRadius; // or 2.0 if influenceRadius is small
+        double margin = influenceRadius * 2.0;
         Point3D origin = min.subtract(margin, margin, margin);
         double sizeX = max.getX() - min.getX() + 2 * margin;
         double sizeY = max.getY() - min.getY() + 2 * margin;
@@ -118,10 +207,6 @@ public class MarchingCubesUIApp extends Application {
                 .resolution(resolution)
                 .build();
 
-//System.out.println("VoxelGrid Origin: " + grid.getOrigin());
-//System.out.println("VoxelGrid Dimensions: " + grid.getDimX() + " x " + grid.getDimY() + " x " + grid.getDimZ());
-//System.out.println("VoxelGrid voxel size: " + grid.getVoxelSize());
-//System.out.println("Point cloud bounds: " + min + " to " + max);
         int normalsK = 6;
 
         Map<Point3D, Point3D> normalMap = PointCloudUtils.estimateNormals(points, normalsK);
@@ -131,7 +216,14 @@ public class MarchingCubesUIApp extends Application {
                 points, mode, influenceRadius, smoothedNormalMap);
         fieldGenerator.applyTo(grid);
 
-        MarchingCubes mc = new MarchingCubes(grid, isovalue, true);
+        boolean outwardIncreases =
+                (mode == FieldMode.UDF_TSDF) ||
+                (mode == FieldMode.VOXEL_SDF) ||
+                (mode == FieldMode.SDF) || 
+                (mode == FieldMode.MLS_TSDF);
+
+        double iso = (mode == FieldMode.UDF_TSDF) ? 0.0 : isovalue;
+        MarchingCubes mc = new MarchingCubes(grid, iso, true, outwardIncreases);
         MarchingCubes.MeshData meshData = mc.generateMeshData();
         TriangleMesh mesh = toTriangleMesh(meshData);
         return mesh;
@@ -139,46 +231,110 @@ public class MarchingCubesUIApp extends Application {
     
 public TriangleMesh computeMarchingTetrahedra(List<Point3D> points, int resolution,
         double influenceRadius, FieldMode mode) {
-    Point3D min = PointCloudUtils.computeBoundingBoxMin(points);
-    Point3D max = PointCloudUtils.computeBoundingBoxMax(points);
-    double margin = influenceRadius;
+
+    // ---- 0) Decide whether to extract a surface subset ----
+    boolean volumetric = isLikelyVolumetric(points); // heuristic below
+
+    List<Point3D> usedPts;
+    if (volumetric) {
+        // keep top 30% “outer shell” points by kNN spacing
+        List<Point3D> surfacePts = PointCloudUtils.extractSurfacePoints(points, 12, 0.30);
+        // fallback if we got too few points
+        if (surfacePts.size() < Math.max(200, points.size() / 10)) {
+            usedPts = points; // too sparse → revert
+        } else {
+            usedPts = surfacePts;
+        }
+    } else {
+        // already a surface cloud (sphere/torus in your UI)
+        usedPts = points;
+    }
+
+    // ---- 1) Grid bounds from the points we actually use ----
+    Point3D min = PointCloudUtils.computeBoundingBoxMin(usedPts);
+    Point3D max = PointCloudUtils.computeBoundingBoxMax(usedPts);
+    double margin = influenceRadius * 2.0; // wide enough so outside-air is reachable for TSDF
     Point3D origin = min.subtract(margin, margin, margin);
     double sizeX = max.getX() - min.getX() + 2 * margin;
     double sizeY = max.getY() - min.getY() + 2 * margin;
     double sizeZ = max.getZ() - min.getZ() + 2 * margin;
 
     VoxelGrid grid = new VoxelGrid.Builder()
-            .pointCloud(points)
+            .pointCloud(usedPts)   // IMPORTANT: keep builder + field in sync
             .margin(margin)
             .origin(origin)
             .size(sizeX, sizeY, sizeZ)
             .resolution(resolution)
             .build();
 
-    int normalsK = 6;
-    Map<Point3D, Point3D> normalMap = PointCloudUtils.estimateNormals(points, normalsK);
-    Map<Point3D, Point3D> smoothedNormalMap = PointCloudUtils.smoothNormals(normalMap, points, normalsK);
+    // ---- 2) Normals on the same set of points we used for the field ----
+    int normalsK = volumetric ? 16 : 12; // a bit more neighbors if we extracted
+    Map<Point3D, Point3D> normalMap = PointCloudUtils.estimateNormals(usedPts, normalsK);
+    Map<Point3D, Point3D> smoothedNormalMap = PointCloudUtils.smoothNormals(normalMap, usedPts, normalsK);
 
+    // ---- 3) Build the field from the same set ----
     PointCloudToField fieldGenerator = new PointCloudToField(
-            points, mode, influenceRadius, smoothedNormalMap);
+            usedPts, mode, influenceRadius, smoothedNormalMap);
     fieldGenerator.applyTo(grid);
 
-    MarchingTetrahedra mt = new MarchingTetrahedra(grid, isovalue, true);
+    // ---- 4) Iso + orientation policy and extract ----
+    boolean outwardIncreases =
+            (mode == FieldMode.UDF_TSDF) || (mode == FieldMode.VOXEL_SDF) ||
+            (mode == FieldMode.SDF)  || (mode == FieldMode.VOXEL_SDF);
+    double iso = (mode == FieldMode.UDF_TSDF) ? 0.0 : isovalue;
+
+    MarchingTetrahedra mt = new MarchingTetrahedra(grid, iso, true, outwardIncreases);
     return mt.generateMesh();
 }
+
+/**
+ * Heuristic: a volumetric cloud has many points away from the outer shell.
+ * We shrink the bounding box by 20% on each side and see how many points
+ * lie inside that inner box. If the fraction is big, call it volumetric.
+ */
+private static boolean isLikelyVolumetric(List<Point3D> pts) {
+    if (pts.isEmpty()) return false;
+    Point3D min = PointCloudUtils.computeBoundingBoxMin(pts);
+    Point3D max = PointCloudUtils.computeBoundingBoxMax(pts);
+    double sx = max.getX() - min.getX();
+    double sy = max.getY() - min.getY();
+    double sz = max.getZ() - min.getZ();
+
+    // shrink 20% per side → inner box is 60% of each dimension
+    double shrink = 0.2;
+    double ix0 = min.getX() + shrink * sx, ix1 = max.getX() - shrink * sx;
+    double iy0 = min.getY() + shrink * sy, iy1 = max.getY() - shrink * sy;
+    double iz0 = min.getZ() + shrink * sz, iz1 = max.getZ() - shrink * sz;
+
+    int inside = 0;
+    for (Point3D p : pts) {
+        if (p.getX() >= ix0 && p.getX() <= ix1 &&
+            p.getY() >= iy0 && p.getY() <= iy1 &&
+            p.getZ() >= iz0 && p.getZ() <= iz1) {
+            inside++;
+        }
+    }
+    double fracInside = inside / (double) pts.size();
+
+    // Tunable threshold: if >30% of points are deep inside, treat as volumetric
+    return fracInside > 0.30;
+}
+
 
 private void regenerate(int resolution, double influenceRadius, FieldMode mode) {
     pointCloudGroup.getChildren().clear();
     meshGroup.getChildren().clear();
 
     List<Point3D> points = generatePointCloud(pointCount, shapeType);
-    renderPointCloud(points);
 
     TriangleMesh mesh = null;
     switch (surfaceMode) {
         case CARVED_CONCAVE_HULL:
             mesh = computeCarvedConcaveHull(points, influenceRadius);
             break;
+        case CONTRACTION_CONCAVE_HULL: 
+            mesh = ContractionConcaveHullMini.build(points, influenceRadius);
+            break;            
         case MARCHING_TETRAHEDRA:
             mesh = computeMarchingTetrahedra(points, resolution, influenceRadius, mode);
             break;
@@ -190,9 +346,17 @@ private void regenerate(int resolution, double influenceRadius, FieldMode mode) 
     }
 
     MeshView meshView = new MeshView(mesh);
-    meshView.setCullFace(CullFace.NONE);
-    meshView.setMaterial(new PhongMaterial(Color.DODGERBLUE));
+    meshView.setCullFace(CullFace.BACK);
+    meshView.setMaterial(new PhongMaterial(Color.DODGERBLUE.deriveColor(0, 1, 1, 0.1)));
     meshGroup.getChildren().add(meshView);
+    
+    MeshView linesMeshView = new MeshView(mesh);
+    linesMeshView.setCullFace(CullFace.NONE);
+    linesMeshView.setDrawMode(DrawMode.LINE);
+    linesMeshView.setMaterial(new PhongMaterial(Color.ALICEBLUE));
+    meshGroup.getChildren().add(linesMeshView);
+
+    renderPointCloud(points);   
 }
 
     public static TriangleMesh toTriangleMesh(MarchingCubes.MeshData meshData) {

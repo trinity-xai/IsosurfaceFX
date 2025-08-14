@@ -286,8 +286,8 @@ private void processCube(int x, int y, int z, List<Integer> faces) {
 
             // JavaFX uses CCW as front; write (after possible flip)
             faces.add(vIdx[0]); faces.add(0);
-            faces.add(vIdx[2]); faces.add(0);
             faces.add(vIdx[1]); faces.add(0);
+            faces.add(vIdx[2]); faces.add(0);
         }
     }
 }
@@ -295,32 +295,60 @@ private void processCube(int x, int y, int z, List<Integer> faces) {
     // ──────────────────────────────
     // Gradient sampling (central differences, normalized)
     // ──────────────────────────────
-    private Point3D gradientAt(Point3D p) {
-        // world → grid coordinates
-        double inv = 1.0 / grid.getVoxelSize();
-        Point3D o = grid.getOrigin();
-        double gx = (p.getX() - o.getX()) * inv;
-        double gy = (p.getY() - o.getY()) * inv;
-        double gz = (p.getZ() - o.getZ()) * inv;
+//    private Point3D gradientAt(Point3D p) {
+//        // world → grid coordinates
+//        double inv = 1.0 / grid.getVoxelSize();
+//        Point3D o = grid.getOrigin();
+//        double gx = (p.getX() - o.getX()) * inv;
+//        double gy = (p.getY() - o.getY()) * inv;
+//        double gz = (p.getZ() - o.getZ()) * inv;
+//
+//        int x = (int)Math.round(gx);
+//        int y = (int)Math.round(gy);
+//        int z = (int)Math.round(gz);
+//
+//        // clamp to interior to allow ±1 sampling
+//        x = Math.max(1, Math.min(grid.getDimX()-2, x));
+//        y = Math.max(1, Math.min(grid.getDimY()-2, y));
+//        z = Math.max(1, Math.min(grid.getDimZ()-2, z));
+//
+//        float dx = (grid.get(x+1, y,   z  ) - grid.get(x-1, y,   z  )) * 0.5f;
+//        float dy = (grid.get(x,   y+1, z  ) - grid.get(x,   y-1, z  )) * 0.5f;
+//        float dz = (grid.get(x,   y,   z+1) - grid.get(x,   y,   z-1)) * 0.5f;
+//
+//        Point3D g = new Point3D(dx, dy, dz);
+//        double m = g.magnitude();
+//        return (m > 1e-12) ? g.multiply(1.0 / m) : g; // normalized (direction only)
+//    }
+private Point3D gradientAt(Point3D p) {
+    final double h = grid.getVoxelSize();
+    final Point3D o = grid.getOrigin();
 
-        int x = (int)Math.round(gx);
-        int y = (int)Math.round(gy);
-        int z = (int)Math.round(gz);
+    // Convert world → grid coords (continuous)
+    final double gx = (p.getX() - o.getX()) / h;
+    final double gy = (p.getY() - o.getY()) / h;
+    final double gz = (p.getZ() - o.getZ()) / h;
 
-        // clamp to interior to allow ±1 sampling
-        x = Math.max(1, Math.min(grid.getDimX()-2, x));
-        y = Math.max(1, Math.min(grid.getDimY()-2, y));
-        z = Math.max(1, Math.min(grid.getDimZ()-2, z));
+    // Use floor (not round), then central-difference around that index.
+    int ix = (int)Math.floor(gx);
+    int iy = (int)Math.floor(gy);
+    int iz = (int)Math.floor(gz);
 
-        float dx = (grid.get(x+1, y,   z  ) - grid.get(x-1, y,   z  )) * 0.5f;
-        float dy = (grid.get(x,   y+1, z  ) - grid.get(x,   y-1, z  )) * 0.5f;
-        float dz = (grid.get(x,   y,   z+1) - grid.get(x,   y,   z-1)) * 0.5f;
+    // Clamp so +/-1 neighbors exist
+    ix = Math.max(1, Math.min(grid.getDimX()-2, ix));
+    iy = Math.max(1, Math.min(grid.getDimY()-2, iy));
+    iz = Math.max(1, Math.min(grid.getDimZ()-2, iz));
 
-        Point3D g = new Point3D(dx, dy, dz);
-        double m = g.magnitude();
-        return (m > 1e-12) ? g.multiply(1.0 / m) : g; // normalized (direction only)
-    }
+    // Central differences in index space (unit = one voxel)
+    float dx = (grid.get(ix+1, iy,   iz  ) - grid.get(ix-1, iy,   iz  )) * 0.5f;
+    float dy = (grid.get(ix,   iy+1, iz  ) - grid.get(ix,   iy-1, iz  )) * 0.5f;
+    float dz = (grid.get(ix,   iy,   iz+1) - grid.get(ix,   iy,   iz-1)) * 0.5f;
 
+    // Convert to world gradient by dividing by voxel size (optional for sign only)
+    Point3D g = new Point3D(dx, dy, dz);
+    double m = g.magnitude();
+    return (m > 1e-12) ? g.multiply(1.0/m) : g;  // normalized; sign-only is all we need
+}
     // ──────────────────────────────
     // Helpers: classify diagonal types inside a cube
     // ──────────────────────────────

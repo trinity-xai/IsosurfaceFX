@@ -14,10 +14,16 @@ public enum SurfaceMode {
     MARCHING_TETRAHEDRA("Marching Tetrahedra"),
 
     /**
-     * (Future) Carved Convex Hull method.
+     * Carved Convex Hull method.
      * Approximates a concave hull by filtering faces of the convex hull using circumradius.
      */
     CARVED_CONCAVE_HULL("Carved Convex Hull"),
+
+    /**
+     * Contraction Concave Hull method.
+     * Approximates a concave hull by using a Point Cloud Contraction theorem.
+     */
+    CONTRACTION_CONCAVE_HULL("Contraction Concave Hull"),
 
     /**
      * (Future) True Delaunay+Alpha Shape extraction.

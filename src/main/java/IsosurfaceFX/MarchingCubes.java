@@ -183,31 +183,59 @@ public class MarchingCubes {
     }
 
     // ---- gradient sampler (central differences in grid space, normalized) ----
-    private Point3D gradientAt(Point3D p) {
-        double inv = 1.0 / grid.getVoxelSize();
-        Point3D o = grid.getOrigin();
+//    private Point3D gradientAt(Point3D p) {
+//        double inv = 1.0 / grid.getVoxelSize();
+//        Point3D o = grid.getOrigin();
+//
+//        double gx = (p.getX() - o.getX()) * inv;
+//        double gy = (p.getY() - o.getY()) * inv;
+//        double gz = (p.getZ() - o.getZ()) * inv;
+//
+//        int x = (int)Math.round(gx);
+//        int y = (int)Math.round(gy);
+//        int z = (int)Math.round(gz);
+//
+//        x = Math.max(1, Math.min(grid.getDimX()-2, x));
+//        y = Math.max(1, Math.min(grid.getDimY()-2, y));
+//        z = Math.max(1, Math.min(grid.getDimZ()-2, z));
+//
+//        float dx = (grid.get(x+1,y,z) - grid.get(x-1,y,z)) * 0.5f;
+//        float dy = (grid.get(x,y+1,z) - grid.get(x,y-1,z)) * 0.5f;
+//        float dz = (grid.get(x,y,z+1) - grid.get(x,y,z-1)) * 0.5f;
+//
+//        Point3D g = new Point3D(dx, dy, dz);
+//        double m = g.magnitude();
+//        return (m > 1e-12) ? g.multiply(1.0/m) : g;
+//    }
+private Point3D gradientAt(Point3D p) {
+    final double h = grid.getVoxelSize();
+    final Point3D o = grid.getOrigin();
 
-        double gx = (p.getX() - o.getX()) * inv;
-        double gy = (p.getY() - o.getY()) * inv;
-        double gz = (p.getZ() - o.getZ()) * inv;
+    // Convert world → grid coords (continuous)
+    final double gx = (p.getX() - o.getX()) / h;
+    final double gy = (p.getY() - o.getY()) / h;
+    final double gz = (p.getZ() - o.getZ()) / h;
 
-        int x = (int)Math.round(gx);
-        int y = (int)Math.round(gy);
-        int z = (int)Math.round(gz);
+    // Use floor (not round), then central-difference around that index.
+    int ix = (int)Math.floor(gx);
+    int iy = (int)Math.floor(gy);
+    int iz = (int)Math.floor(gz);
 
-        x = Math.max(1, Math.min(grid.getDimX()-2, x));
-        y = Math.max(1, Math.min(grid.getDimY()-2, y));
-        z = Math.max(1, Math.min(grid.getDimZ()-2, z));
+    // Clamp so +/-1 neighbors exist
+    ix = Math.max(1, Math.min(grid.getDimX()-2, ix));
+    iy = Math.max(1, Math.min(grid.getDimY()-2, iy));
+    iz = Math.max(1, Math.min(grid.getDimZ()-2, iz));
 
-        float dx = (grid.get(x+1,y,z) - grid.get(x-1,y,z)) * 0.5f;
-        float dy = (grid.get(x,y+1,z) - grid.get(x,y-1,z)) * 0.5f;
-        float dz = (grid.get(x,y,z+1) - grid.get(x,y,z-1)) * 0.5f;
+    // Central differences in index space (unit = one voxel)
+    float dx = (grid.get(ix+1, iy,   iz  ) - grid.get(ix-1, iy,   iz  )) * 0.5f;
+    float dy = (grid.get(ix,   iy+1, iz  ) - grid.get(ix,   iy-1, iz  )) * 0.5f;
+    float dz = (grid.get(ix,   iy,   iz+1) - grid.get(ix,   iy,   iz-1)) * 0.5f;
 
-        Point3D g = new Point3D(dx, dy, dz);
-        double m = g.magnitude();
-        return (m > 1e-12) ? g.multiply(1.0/m) : g;
-    }
-
+    // Convert to world gradient by dividing by voxel size (optional for sign only)
+    Point3D g = new Point3D(dx, dy, dz);
+    double m = g.magnitude();
+    return (m > 1e-12) ? g.multiply(1.0/m) : g;  // normalized; sign-only is all we need
+}
     // ---- linear interpolation along an edge ----
     private Point3D interpolate(Point3D p1, Point3D p2, float v1, float v2) {
         if (!interpolate || Math.abs(isovalue - v1) < 1e-5) return p1;

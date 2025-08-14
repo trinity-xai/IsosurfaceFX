@@ -8,6 +8,7 @@ import java.util.List;
  */
 import javafx.geometry.Point3D;
 import java.util.*;
+import java.util.function.BiFunction;
 import java.util.stream.IntStream;
 
 public class PointCloudToField {
@@ -16,7 +17,8 @@ public class PointCloudToField {
         GAUSSIAN,
         SDF,          // point-normal projection SDF
         VOXEL_SDF,    // voxel-centric SDF
-        UDF_TSDF      // unsigned distance + outside flood-fill sign
+        UDF_TSDF,      // unsigned distance + outside flood-fill sign
+        MLS_TSDF
     }
 
     private final List<Point3D> pointCloud;
@@ -38,11 +40,108 @@ public class PointCloudToField {
         switch (mode) {
             case GAUSSIAN -> computeGaussian(grid);
             case SDF      -> computeSignedDistanceField(grid);
-            case VOXEL_SDF-> computeSignedDistanceFieldVoxelCentric(grid); // your working version
-            case UDF_TSDF -> computeUdfTsdf(grid);                         // <-- NEW
+            case VOXEL_SDF-> computeSignedDistanceFieldVoxelCentric(grid); 
+            case UDF_TSDF -> computeUdfTsdf(grid);
+//            case UDF_TSDF -> computeUnionOfBallsTsdf(grid);
+            case MLS_TSDF -> computeMLS_TSDFVoxelCentric(grid);
         }
     }
+private void computeMLS_TSDFVoxelCentric(VoxelGrid grid) {
+    final int nx = grid.getDimX(), ny = grid.getDimY(), nz = grid.getDimZ();
+    final double h  = grid.getVoxelSize();
+    final Point3D o = grid.getOrigin();
 
+    // Kernel size: tie sigma to your influenceRadius
+    final double sigma = Math.max(1e-6, influenceRadius * 0.5);
+    final double twoSigma2 = 2.0 * sigma * sigma;
+    // Truncation (helps robustness and marching stability)
+    final double tau = Math.max(h * 2.5, influenceRadius);
+
+    // Precompute a simple uniform grid hash for kNN-ish neighborhood (fast + dep-free)
+    final double cell = Math.max(h, sigma);
+    Map<Long, List<Point3D>> buckets = new HashMap<>();
+    Map<Point3D, Point3D> normals = this.normalMap; // already smoothed upstream
+
+    for (Point3D p : pointCloud) {
+        long key = hashCell(p, cell);
+        buckets.computeIfAbsent(key, k -> new ArrayList<>()).add(p);
+    }
+
+    // Neighborhood query helper
+    final int R = 2; // search +/- 2 cells in each axis (~ enough for gaussian falloff)
+    BiFunction<Point3D, List<Point3D>, Point3D> normalOf = (p, list) -> normals.getOrDefault(p, Point3D.ZERO);
+
+    for (int x = 0; x < nx; x++) {
+        final double X = o.getX() + x * h;
+        for (int y = 0; y < ny; y++) {
+            final double Y = o.getY() + y * h;
+            for (int z = 0; z < nz; z++) {
+                final double Z = o.getZ() + z * h;
+                Point3D vc = new Point3D(X, Y, Z);
+
+                // gather candidates from neighboring hash buckets
+                int cx = (int)Math.floor(X / cell);
+                int cy = (int)Math.floor(Y / cell);
+                int cz = (int)Math.floor(Z / cell);
+
+                double num = 0.0, den = 0.0;
+                for (int dx = -R; dx <= R; dx++) {
+                    for (int dy = -R; dy <= R; dy++) {
+                        for (int dz = -R; dz <= R; dz++) {
+                            long k = pack(cx + dx, cy + dy, cz + dz);
+                            List<Point3D> lst = buckets.get(k);
+                            if (lst == null) continue;
+
+                            for (Point3D p : lst) {
+                                Point3D n = normalOf.apply(p, lst);
+                                if (n == Point3D.ZERO) continue;
+
+                                double rx = X - p.getX(), ry = Y - p.getY(), rz = Z - p.getZ();
+                                double r2 = rx*rx + ry*ry + rz*rz;
+                                // fast reject far samples
+                                if (r2 > (influenceRadius * influenceRadius)) continue;
+
+                                double w = Math.exp(-r2 / twoSigma2);
+                                // signed distance along the oriented plane at p
+                                double di = rx * n.getX() + ry * n.getY() + rz * n.getZ();
+
+                                num += w * di;
+                                den += w;
+                            }
+                        }
+                    }
+                }
+
+                float sdf;
+                if (den < 1e-12) {
+                    // No support → mark as 'far outside' (positive by convention)
+                    sdf = Float.POSITIVE_INFINITY;
+                } else {
+                    double d = num / den;
+                    // truncation for a TSDF flavor (stabilizes marching)
+                    if (d >  tau) d =  tau;
+                    if (d < -tau) d = -tau;
+                    sdf = (float) d;
+                }
+                grid.set(x, y, z, sdf);
+            }
+        }
+    }
+}
+
+// simple 3D hash (no deps)
+private static long hashCell(Point3D p, double cell) {
+    int ix = (int)Math.floor(p.getX() / cell);
+    int iy = (int)Math.floor(p.getY() / cell);
+    int iz = (int)Math.floor(p.getZ() / cell);
+    return pack(ix, iy, iz);
+}
+private static long pack(int x, int y, int z) {
+    // pack 3 signed ints into a long deterministically
+    return  (((long)x) & 0x1FFFFFL) << 42
+          | (((long)y) & 0x1FFFFFL) << 21
+          | (((long)z) & 0x1FFFFFL);
+}
     // ------------------------------------------------------------
     // UDF -> TSDF (normals-free)  
     // ------------------------------------------------------------
@@ -155,6 +254,63 @@ public class PointCloudToField {
             grid.set(x,y,z, outside[x][y][z] ?  d : -d);
         }
     }
+// Strategy: 
+// 1) Mark a narrow surface band: unsigned distance < tau
+// 2) Flood-fill from ALL boundary voxels through NON-band voxels
+// 3) Outside = visited; Inside = not visited
+private void signUnsignedDistanceViaBandFlood(VoxelGrid grid, double tau) {
+    final int nx = grid.getDimX(), ny = grid.getDimY(), nz = grid.getDimZ();
+
+    // 1) Classify voxels
+    final byte[][][] band = new byte[nx][ny][nz];  // 1 = surface band, 0 = free
+    for (int x=0;x<nx;x++) for (int y=0;y<ny;y++) for (int z=0;z<nz;z++) {
+        float d = grid.get(x,y,z);
+        if (!Float.isFinite(d)) continue;
+        if (d < tau) band[x][y][z] = 1;
+    }
+
+    // 2) Flood from ALL boundary voxels that are NOT in the band
+    final boolean[][][] outside = new boolean[nx][ny][nz];
+    ArrayDeque<int[]> q = new ArrayDeque<>();
+
+    // seed every boundary cell not in surface band
+    for (int x=0;x<nx;x++) for (int y=0;y<ny;y++) {
+        int z0=0, z1=nz-1;
+        if (band[x][y][z0]==0) { outside[x][y][z0]=true; q.add(new int[]{x,y,z0}); }
+        if (band[x][y][z1]==0) { outside[x][y][z1]=true; q.add(new int[]{x,y,z1}); }
+    }
+    for (int x=0;x<nx;x++) for (int z=0;z<nz;z++) {
+        int y0=0, y1=ny-1;
+        if (band[x][y0][z]==0) { outside[x][y0][z]=true; q.add(new int[]{x,y0,z}); }
+        if (band[x][y1][z]==0) { outside[x][y1][z]=true; q.add(new int[]{x,y1,z}); }
+    }
+    for (int y=0;y<ny;y++) for (int z=0;z<nz;z++) {
+        int x0=0, x1=nx-1;
+        if (band[x0][y][z]==0) { outside[x0][y][z]=true; q.add(new int[]{x0,y,z}); }
+        if (band[x1][y][z]==0) { outside[x1][y][z]=true; q.add(new int[]{x1,y,z}); }
+    }
+
+    // 6-connected flood through non-band space
+    final int[][] N6 = {{1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1}};
+    while (!q.isEmpty()) {
+        int[] a=q.poll();
+        for (int[] d:N6) {
+            int nxu=a[0]+d[0], nyu=a[1]+d[1], nzu=a[2]+d[2];
+            if (nxu<0||nyu<0||nzu<0||nxu>=nx||nyu>=ny||nzu>=nz) continue;
+            if (outside[nxu][nyu][nzu]) continue;
+            if (band[nxu][nyu][nzu]==1) continue; // cannot cross the surface band
+            outside[nxu][nyu][nzu]=true;
+            q.add(new int[]{nxu,nyu,nzu});
+        }
+    }
+
+    // 3) Assign sign using the unsigned value already in the grid
+    for (int x=0;x<nx;x++) for (int y=0;y<ny;y++) for (int z=0;z<nz;z++) {
+        float u = grid.get(x,y,z);
+        if (!Float.isFinite(u)) continue;
+        grid.set(x,y,z, outside[x][y][z] ?  +u : -u);
+    }
+}
 
     // Simple 3D integer hash (no collisions needed across neighboring cells)
     private static long hash(int ix, int iy, int iz) {
@@ -164,6 +320,101 @@ public class PointCloudToField {
         long z = ((long)iz & 0x1FFFFFL) << 42;
         return x ^ y ^ z;
     }
+private void computeUnionOfBallsTsdf(VoxelGrid grid) {
+    final int nx=grid.getDimX(), ny=grid.getDimY(), nz=grid.getDimZ();
+    final double h = grid.getVoxelSize();
+    final Point3D o = grid.getOrigin();
+
+    // 1) Spatial hash 
+    double cell = Math.max(h, influenceRadius);
+    Map<Long, List<Point3D>> buckets = new HashMap<>(pointCloud.size()*2);
+    for (Point3D p : pointCloud) {
+        int ix = (int)Math.floor((p.getX()-o.getX())/cell);
+        int iy = (int)Math.floor((p.getY()-o.getY())/cell);
+        int iz = (int)Math.floor((p.getZ()-o.getZ())/cell);
+        buckets.computeIfAbsent(hash(ix,iy,iz), k -> new ArrayList<>()).add(p);
+    }
+
+    // 2) Per-point local radii (k≈6–8; scale≈0.5 is a good start)
+    Map<Point3D, Double> rMap = estimateLocalRadii(pointCloud, buckets, cell, o, /*k*/8, /*scale*/0.5);
+
+    // 3) Narrow search: only within ~ (r_i + band). Use band≈2h to be safe.
+    double band = 2.0*h;
+    int r = (int)Math.ceil((influenceRadius + band) / cell);
+
+    // 4) Evaluate φ(x) = min_i (‖x − p_i‖ − r_i) over nearby buckets
+    for (int x=0; x<nx; x++) for (int y=0; y<ny; y++) for (int z=0; z<nz; z++) {
+        Point3D vc = new Point3D(o.getX()+x*h, o.getY()+y*h, o.getZ()+z*h);
+
+        int cx = (int)Math.floor((vc.getX()-o.getX())/cell);
+        int cy = (int)Math.floor((vc.getY()-o.getY())/cell);
+        int cz = (int)Math.floor((vc.getZ()-o.getZ())/cell);
+
+        double best = Double.POSITIVE_INFINITY;
+        for (int dx=-r; dx<=r; dx++)
+            for (int dy=-r; dy<=r; dy++)
+                for (int dz=-r; dz<=r; dz++) {
+                    List<Point3D> bin = buckets.get(hash(cx+dx, cy+dy, cz+dz));
+                    if (bin == null) continue;
+                    for (Point3D q : bin) {
+                        double ri = rMap.getOrDefault(q, influenceRadius*0.5);
+                        double val = vc.distance(q) - ri;
+                        if (val < best) best = val;
+                    }
+                }
+        grid.set(x,y,z, (float)Math.abs(best)); // unsigned for now
+    }
+
+//    // 5) Sign with the outside flood-fill 
+//    double spacingGuess = medianRadius(rMap);                 // ~typical r_i
+//    double outsideThreshold = Math.max(1.5*h, 1.0*spacingGuess);
+//    signUnsignedDistanceWithFloodFill(grid, outsideThreshold);
+
+    // tau ~ 1–2 voxels is plenty. Start with 2*voxelSize.
+    double tau = 2.0 * grid.getVoxelSize();
+    signUnsignedDistanceViaBandFlood(grid, tau);    
+}
+
+private static double medianRadius(Map<Point3D, Double> rMap) {
+    if (rMap.isEmpty()) return 1.0;
+    ArrayList<Double> rs = new ArrayList<>(rMap.values());
+    Collections.sort(rs);
+    int n = rs.size();
+    return (n%2==1)? rs.get(n/2) : 0.5*(rs.get(n/2-1)+rs.get(n/2));
+}    
+ private Map<Point3D, Double> estimateLocalRadii(List<Point3D> pts,
+                                                Map<Long, List<Point3D>> buckets,
+                                                double cellSize,
+                                                Point3D origin,
+                                                int k, double scale) {
+    Map<Point3D, Double> radii = new HashMap<>(pts.size()*2);
+    for (Point3D p : pts) {
+        // gather neighbors from adjacent buckets
+        int ix = (int)Math.floor((p.getX()-origin.getX())/cellSize);
+        int iy = (int)Math.floor((p.getY()-origin.getY())/cellSize);
+        int iz = (int)Math.floor((p.getZ()-origin.getZ())/cellSize);
+        List<Double> dists = new ArrayList<>(k*2);
+        for (int dx=-1; dx<=1; dx++)
+            for (int dy=-1; dy<=1; dy++)
+                for (int dz=-1; dz<=1; dz++) {
+                    List<Point3D> bin = buckets.get(hash(ix+dx, iy+dy, iz+dz));
+                    if (bin == null) continue;
+                    for (Point3D q : bin) {
+                        if (q == p) continue;
+                        dists.add(p.distance(q));
+                    }
+                }
+        if (dists.isEmpty()) { radii.put(p, scale * influenceRadius); continue; }
+        Collections.sort(dists);
+        // use median of first k distances (or all if fewer)
+        int take = Math.min(k, dists.size());
+        double med = (take % 2 == 1)
+                ? dists.get(take/2)
+                : 0.5*(dists.get(take/2-1) + dists.get(take/2));
+        radii.put(p, scale * med); // r_i = scale * local spacing
+    }
+    return radii;
+}   
 private void computeSignedDistanceFieldVoxelCentric(VoxelGrid grid) {
     int dimX = grid.getDimX();
     int dimY = grid.getDimY();

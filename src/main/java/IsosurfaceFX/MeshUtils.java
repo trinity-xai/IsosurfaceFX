@@ -49,8 +49,8 @@ public final class MeshUtils {
         mesh.getFaces().setAll(faceData);
 
         // Optional: smooth shading
-        // int[] groups = MeshUtils.singleSmoothingGroup(faces.size());
-        // mesh.getFaceSmoothingGroups().setAll(groups);
+         int[] groups = MeshUtils.singleSmoothingGroup(faces.size());
+         mesh.getFaceSmoothingGroups().setAll(groups);
         return mesh;
     }
 
