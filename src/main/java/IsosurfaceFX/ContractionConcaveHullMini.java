@@ -43,7 +43,7 @@ private ContractionConcaveHullMini() {}
 
         // 5) Priority queue of interior points by distance to nearest facet
         double med = medianHullEdgeLength(H, F);
-        final double maxAttach = Math.max(1e-6, influenceRadius + 0.5 * med);
+        final double maxAttach = Math.max(1e-6, influenceRadius + 0.5 * med*2.0);
         PriorityQueue<Cand> Q = new PriorityQueue<>(Comparator.comparingDouble(c -> c.d));
 
         for (int i = 0; i < n; i++) if (!on[i]) {
@@ -64,13 +64,21 @@ private ContractionConcaveHullMini() {}
             Point3D A = points.get(f[0]), B = points.get(f[1]), C = points.get(f[2]);
             Point3D P = points.get(c.pi);
 
-            if (!isOutsideFacet(P, A, B, C)) continue; // cheap “outside” guard
+            //if (!isOutsideFacet(P, A, B, C)) continue; // cheap “outside” guard
+            if (!isInsideFacet(P, A, B, C)) continue;   // attach only from inside
 
-            // Replace F with (A,B,P), (B,C,P), (C,A,P)
+            // Reference normal of the facet being replaced
+            double[] refN = new double[]{
+                (B.getY() - A.getY()) * (C.getZ() - A.getZ()) - (B.getZ() - A.getZ()) * (C.getY() - A.getY()),
+                (B.getZ() - A.getZ()) * (C.getX() - A.getX()) - (B.getX() - A.getX()) * (C.getZ() - A.getZ()),
+                (B.getX() - A.getX()) * (C.getY() - A.getY()) - (B.getY() - A.getY()) * (C.getX() - A.getX())
+            };
+
+            // Replace with oriented triangles
             faces.remove(nf.fi);
-            faces.add(new int[]{ f[0], f[1], c.pi });
-            faces.add(new int[]{ f[1], f[2], c.pi });
-            faces.add(new int[]{ f[2], f[0], c.pi });
+            faces.add(oriented(f[0], f[1], c.pi, points, refN));
+            faces.add(oriented(f[1], f[2], c.pi, points, refN));
+            faces.add(oriented(f[2], f[0], c.pi, points, refN));
             on[c.pi] = true;
 
             // Re-seed queue (simple & safe; optimize later if needed)
@@ -92,6 +100,83 @@ private ContractionConcaveHullMini() {}
     // ---- helpers (tight) ----
     private record Cand(int pi, int fi, double d) {}
     private record NF(int fi, double d) {}
+
+// Ensures triangle (i,j,k) is wound so its normal points in the same general direction as refN
+/**
+ * Returns a triangle index triplet whose winding makes its geometric normal
+ * point in the same general direction as a given reference normal.
+ * <p>
+ * This is useful when replacing a facet with new triangles: the new triangles
+ * should keep the original facet's outward orientation so that normals remain
+ * consistent and the mesh stays closed.
+ *
+ * <h4>How it works</h4>
+ * <ol>
+ *   <li>Compute the triangle's (unnormalized) geometric normal
+ *       {@code N = (B - A) x (C - A)} using the right-hand rule.</li>
+ *   <li>Take the dot product {@code dot = N · refN} with the provided
+ *       reference normal (also unnormalized).</li>
+ *   <li>If {@code dot < 0}, the triangle is wound opposite to {@code refN}
+ *       — swap the last two indices to flip its orientation.</li>
+ *   <li>If the triangle is degenerate (very small |N|) or {@code refN} is
+ *       near zero, return the original order unchanged.</li>
+ * </ol>
+ *
+ * <p><b>Notes:</b> The sign of the dot product is invariant to uniform
+ * scaling, so neither {@code N} nor {@code refN} need to be normalized.
+ *
+ * @param i    index of the first vertex (A) in {@code pts}
+ * @param j    index of the second vertex (B) in {@code pts}
+ * @param k    index of the third vertex (C) in {@code pts}
+ * @param pts  list of 3D points; indices {@code i,j,k} must be valid
+ * @param refN reference outward normal for the facet being replaced;
+ *             3 elements (x,y,z), not necessarily unit length
+ * @return an int[3] = {i, j, k} if already aligned with {@code refN},
+ *         otherwise {i, k, j} to flip the winding
+ */
+private static int[] oriented(int i, int j, int k, List<Point3D> pts, double[] refN) {
+    // Safety: if refN is unusable, keep original winding.
+    if (refN == null || refN.length < 3) return new int[]{i, j, k};
+    double rnx = refN[0], rny = refN[1], rnz = refN[2];
+    double refLen2 = rnx*rnx + rny*rny + rnz*rnz;
+    if (refLen2 < 1e-20) return new int[]{i, j, k};
+
+    // Fetch triangle vertices
+    Point3D A = pts.get(i);
+    Point3D B = pts.get(j);
+    Point3D C = pts.get(k);
+
+    // Edge vectors: AB and AC
+    double abx = B.getX() - A.getX();
+    double aby = B.getY() - A.getY();
+    double abz = B.getZ() - A.getZ();
+
+    double acx = C.getX() - A.getX();
+    double acy = C.getY() - A.getY();
+    double acz = C.getZ() - A.getZ();
+
+    // Geometric normal via cross product N = AB x AC (unnormalized)
+    double nx = aby * acz - abz * acy;
+    double ny = abz * acx - abx * acz;
+    double nz = abx * acy - aby * acx;
+
+    // Degenerate triangle check (area ~ 0): keep original winding
+    double nLen2 = nx*nx + ny*ny + nz*nz;
+    if (nLen2 < 1e-20) return new int[]{i, j, k};
+
+    // Compare direction with reference normal
+    double dot = nx * rnx + ny * rny + nz * rnz;
+
+    // If pointing opposite, flip winding by swapping (j,k)
+    return (dot >= 0.0) ? new int[]{i, j, k} : new int[]{i, k, j};
+}
+private static boolean isInsideFacet(Point3D P, Point3D A, Point3D B, Point3D C) {
+    double ux = B.getX()-A.getX(), uy = B.getY()-A.getY(), uz = B.getZ()-A.getZ();
+    double vx = C.getX()-A.getX(), vy = C.getY()-A.getY(), vz = C.getZ()-A.getZ();
+    double nx = uy*vz - uz*vy, ny = uz*vx - ux*vz, nz = ux*vy - uy*vx;
+    double side = nx*(P.getX()-A.getX()) + ny*(P.getY()-A.getY()) + nz*(P.getZ()-A.getZ());
+    return side < -1e-7; // inside the hull w.r.t. facet normal
+}
 
     private static int[] mapHullVertsToInputIndices(Point3d[] H, List<Point3D> P, double eps) {
         int[] m = new int[H.length];

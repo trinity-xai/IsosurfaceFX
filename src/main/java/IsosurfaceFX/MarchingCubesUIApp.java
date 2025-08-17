@@ -78,95 +78,6 @@ public class MarchingCubesUIApp extends Application {
         addMouseControls(subScene, camera);
         return subScene;
     }
-//public TriangleMesh computeContractionConcaveHull(List<Point3D> pointCloud, double influenceRadius) {
-//    // --- Convex hull from your existing dependency ---
-//    Point3d[] qhPoints = pointCloud.stream()
-//            .map(p -> new Point3d(p.getX(), p.getY(), p.getZ()))
-//            .toArray(Point3d[]::new);
-//    QuickHull3D hull = new QuickHull3D(qhPoints);
-//
-//    // Map hull vertices back to original indices (ε-match is fine for generated clouds)
-//    Point3d[] Hverts = hull.getVertices();
-//    int[][] Hfaces = hull.getFaces();
-//    int[] hullToInput = mapHullVertsToInputIndices(Hverts, pointCloud, 1e-9);
-//
-//    // Triangulate hull faces to int[3] in input-index space
-//    List<int[]> faces = triangulateFacesUsingMap(Hfaces, hullToInput);
-//
-//    // Mark which input points already lie on hull
-//    int n = pointCloud.size();
-//    boolean[] onSurface = new boolean[n];
-//    for (int[] f : faces) onSurface[f[0]] = onSurface[f[1]] = onSurface[f[2]] = true;
-//
-//    // Seed interior list and a PQ ordered by distance to nearest facet
-//    List<Integer> interior = new ArrayList<>();
-//    for (int i = 0; i < n; i++) if (!onSurface[i]) interior.add(i);
-//
-//    if (interior.isEmpty()) {
-//        return MeshUtils.toTriangleMesh(pointCloud, faces);
-//    }
-//
-//    // Practical “radius of influence” (your UI’s slider): cap how far a point can attach.
-//    // A mild additive of the hull’s median edge length stabilizes early steps on coarse hulls.
-//    double med = medianHullEdgeLength(Hverts, Hfaces);    // you already have this
-//    final double maxAttachDist = Math.max(1e-6, influenceRadius + 0.5 * med);
-//
-//    PriorityQueue<Candidate> Q = new PriorityQueue<>(Comparator.comparingDouble(c -> c.dist));
-//    for (int pi : interior) {
-//        NearestFacet nf = nearestFacet(pi, pointCloud, faces);
-//        if (nf != null) Q.add(new Candidate(pi, nf.fIndex, nf.dist));
-//    }
-//
-//    // Iterate: choose closest point→facet; replace that facet with 3 triangles including the point
-//    final int maxIters = Math.min(n * 5, 20000);
-//    int it = 0;
-//    while (!Q.isEmpty() && it++ < maxIters) {
-//        Candidate c = Q.poll();
-//        if (onSurface[c.pi]) continue;
-//
-//        // Refresh because faces changed
-//        NearestFacet nf = nearestFacet(c.pi, pointCloud, faces);
-//        if (nf == null) continue;
-//        if (nf.dist > maxAttachDist) continue;
-//
-//        int[] F = faces.get(nf.fIndex);
-//        Point3D A = pointCloud.get(F[0]);
-//        Point3D B = pointCloud.get(F[1]);
-//        Point3D C = pointCloud.get(F[2]);
-//        Point3D P = pointCloud.get(c.pi);
-//
-//        // Attach only from the “outside” side of the facet (keeps surface closed)
-//        if (!isOutsideFacet(P, A, B, C)) continue;  // simple normal-side test
-//
-//        // Build proposal (pyramid) and do a quick local intersection guard
-//        int[][] proposal = new int[][]{
-//            new int[]{F[0], F[1], c.pi},
-//            new int[]{F[1], F[2], c.pi},
-//            new int[]{F[2], F[0], c.pi}
-//        };
-//        if (introducesIntersectionsQuick(pointCloud, proposal, faces, nf.fIndex)) {
-//            continue;
-//        }
-//
-//        // Commit: remove facet; add 3 new ones
-//        faces.remove(nf.fIndex);
-//        faces.add(proposal[0]);
-//        faces.add(proposal[1]);
-//        faces.add(proposal[2]);
-//        onSurface[c.pi] = true;
-//
-//        // Rebuild the queue for remaining interior points (simple & safe; optimize later)
-//        Q.clear();
-//        for (int pi : interior) {
-//            if (!onSurface[pi]) {
-//                NearestFacet nf2 = nearestFacet(pi, pointCloud, faces);
-//                if (nf2 != null) Q.add(new Candidate(pi, nf2.fIndex, nf2.dist));
-//            }
-//        }
-//    }
-//
-//    return MeshUtils.toTriangleMesh(pointCloud, faces);
-//}
 
     public TriangleMesh computeCarvedConcaveHull(List<Point3D> pointCloud, double alpha) {
         // 1. Convert to QuickHull3D Point3d[]
@@ -325,7 +236,7 @@ private void regenerate(int resolution, double influenceRadius, FieldMode mode) 
     pointCloudGroup.getChildren().clear();
     meshGroup.getChildren().clear();
 
-    List<Point3D> points = generatePointCloud(pointCount, shapeType);
+    List<Point3D> points = PointCloud.generate(pointCount, shapeType);
 
     TriangleMesh mesh = null;
     switch (surfaceMode) {
@@ -420,7 +331,7 @@ private void regenerate(int resolution, double influenceRadius, FieldMode mode) 
         });
 
         ComboBox<String> shapeSelector = new ComboBox<>();
-        shapeSelector.getItems().addAll("sphere", "cube", "torus");
+        shapeSelector.getItems().addAll("sphere", "cube", "torus", "plus", "hollowbox", "swisssphere");
         shapeSelector.setValue(shapeType);
 
         shapeSelector.valueProperty().addListener((obs, old, val) -> {
@@ -509,46 +420,6 @@ private void regenerate(int resolution, double influenceRadius, FieldMode mode) 
         scene.addEventHandler(ScrollEvent.SCROLL, e -> {
             camera.setTranslateZ(camera.getTranslateZ() + e.getDeltaY());
         });
-    }
-
-    private List<Point3D> generatePointCloud(int count, String shape) {
-        List<Point3D> points = new ArrayList<>();
-        switch (shape) {
-            case "cube":
-                for (int i = 0; i < count; i++) {
-                    points.add(new Point3D(
-                            (Math.random() - 0.5) * 100,
-                            (Math.random() - 0.5) * 100,
-                            (Math.random() - 0.5) * 100
-                    ));
-                }
-                break;
-            case "torus":
-                for (int i = 0; i < count; i++) {
-                    double u = Math.random() * 2 * Math.PI;
-                    double v = Math.random() * 2 * Math.PI;
-                    double R = 30;
-                    double r = 10;
-                    double x = (R + r * Math.cos(v)) * Math.cos(u);
-                    double y = (R + r * Math.cos(v)) * Math.sin(u);
-                    double z = r * Math.sin(v);
-                    points.add(new Point3D(x, y, z));
-                }
-                break;
-            case "sphere":
-            default:
-                for (int i = 0; i < count; i++) {
-                    double theta = Math.random() * 2 * Math.PI;
-                    double phi = Math.acos(2 * Math.random() - 1);
-                    double r = 40;
-                    double x = r * Math.sin(phi) * Math.cos(theta);
-                    double y = r * Math.sin(phi) * Math.sin(theta);
-                    double z = r * Math.cos(phi);
-                    points.add(new Point3D(x, y, z));
-                }
-                break;
-        }
-        return points;
     }
 
     public static void main(String[] args) {
