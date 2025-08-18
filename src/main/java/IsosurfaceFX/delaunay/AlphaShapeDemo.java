@@ -4,6 +4,7 @@ package IsosurfaceFX.delaunay;
  *
  * @author phillsm1
  */
+import IsosurfaceFX.StyleResourceProvider;
 import javafx.application.Application;
 import javafx.beans.property.*;
 import javafx.geometry.Point3D;
@@ -20,16 +21,23 @@ import javafx.stage.Stage;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
+import javafx.scene.paint.PhongMaterial;
 
 public class AlphaShapeDemo extends Application {
 
     private final IntegerProperty pointCount = new SimpleIntegerProperty(3000);
     private final DoubleProperty alpha = new SimpleDoubleProperty(12.0);
+    private final DoubleProperty thickness = new SimpleDoubleProperty(12.0);
+    private final DoubleProperty klocal = new SimpleDoubleProperty(12.0);
     private final StringProperty shape = new SimpleStringProperty("torus");
     private final LongProperty seed = new SimpleLongProperty(42L);
-
+    private final BooleanProperty smooth = new SimpleBooleanProperty(false);
+    private final BooleanProperty peel = new SimpleBooleanProperty(true);
+    private final BooleanProperty visibilityCull = new SimpleBooleanProperty(true);
+    
     private final Group root3D = new Group();
     private MeshView meshView;
+    private MeshView meshViewLines;
     private Group pointsGroup = new Group();
 
     @Override public void start(Stage stage) {
@@ -63,11 +71,13 @@ arc.setPanSpeed(1.0);         // pan pixels → world units
 
         Slider ptsSlider = new Slider(500, 20000, pointCount.get());
         ptsSlider.valueProperty().addListener((obs, o, v) -> pointCount.set(v.intValue()));
-        ptsSlider.setShowTickMarks(true); ptsSlider.setShowTickLabels(true);
+        ptsSlider.setShowTickMarks(true);
+        ptsSlider.setShowTickLabels(true);
 
         Slider alphaSlider = new Slider(1, 50, alpha.get());
         alpha.bind(alphaSlider.valueProperty());
-        alphaSlider.setShowTickMarks(true); alphaSlider.setShowTickLabels(true);
+        alphaSlider.setShowTickMarks(true); 
+        alphaSlider.setShowTickLabels(true);
 
         TextField seedField = new TextField(Long.toString(seed.get()));
         seedField.textProperty().addListener((o,ov,nv)->{
@@ -78,16 +88,45 @@ arc.setPanSpeed(1.0);         // pan pixels → world units
         CheckBox showPoints = new CheckBox("Show points");
         Label status = new Label("Ready.");
 
+CheckBox smoothBox = new CheckBox("Smooth (Taubin)");
+smoothBox.setSelected(false);        
+smooth.bind(smoothBox.selectedProperty());
+        
+CheckBox peelBox = new CheckBox("Peel");
+peelBox.setSelected(true);
+peel.bind(peelBox.selectedProperty());
+
+CheckBox visBox  = new CheckBox("Visibility Cull");
+visBox.setSelected(true);
+visibilityCull.bind(visBox.selectedProperty());
+
+Slider kLocalSlider = new Slider(0.25, 3.0, 1.0);
+kLocalSlider.setShowTickMarks(true); 
+kLocalSlider.setShowTickLabels(true);
+kLocalSlider.setMajorTickUnit(0.5); 
+kLocalSlider.setBlockIncrement(0.1);
+klocal.bind(kLocalSlider.valueProperty());
+
+// optional: thicknessK (peel strength)
+Slider thicknessSlider = new Slider(0.2, 1.2, 0.5);
+thicknessSlider.setShowTickMarks(true); 
+thicknessSlider.setShowTickLabels(true);
+thickness.bind(thicknessSlider.valueProperty());
+        
+        
         Button buildBtn = new Button("Build α-Shape");
         buildBtn.setOnAction(e -> buildAlphaShape(status, wire.isSelected(), showPoints.isSelected()));
 
         VBox controls = new VBox(8,
-                new HBox(8, new Label("Shape:"), shapeBox),
-                new HBox(8, new Label("Points:"), ptsSlider),
-                new HBox(8, new Label("α:"), alphaSlider),
-                new HBox(8, new Label("Seed:"), seedField),
-                new HBox(10, wire, showPoints),
-                buildBtn, status);
+            new HBox(8, new Label("Shape:"), shapeBox),
+            new HBox(8, new Label("Points:"), ptsSlider),
+            new HBox(8, new Label("α:"), alphaSlider),
+            new HBox(8, new Label("Seed:"), seedField),
+            new HBox(10, wire, showPoints),
+            new HBox(10, smoothBox),
+            new HBox(10, new Label("Peel:"), peelBox, new Label("thickK"), thicknessSlider),
+            new HBox(10, visBox, new Label("kLocal"), kLocalSlider),                
+            buildBtn, status);
         controls.setStyle("-fx-padding:12; -fx-background-color:#1f1f1f; -fx-text-fill: white; "
                         + " -fx-font-size: 12px;");
         for (var n : controls.lookupAll(".label")) ((Label)n).setTextFill(Color.LIGHTGRAY);
@@ -99,7 +138,9 @@ arc.setPanSpeed(1.0);         // pan pixels → world units
         stage.setScene(scene);
         stage.setTitle("Alpha Shape Demo");
         stage.show();
-        
+                //Make everything pretty
+        String CSS = StyleResourceProvider.getResource("styles.css").toExternalForm();
+        scene.getStylesheets().add(CSS);
         root3D.getChildren().add(new AmbientLight(Color.color(1,1,1)));
     }
 
@@ -119,12 +160,20 @@ arc.setPanSpeed(1.0);         // pan pixels → world units
         long t0 = System.nanoTime();
 
         // Delaunay + alpha
-        Delaunay3D dt = new BowyerWatson3D(Predicates3D.tolerant());
-        
-//var dt = new BowyerWatson3D(Predicates3D.tolerant());
+Delaunay3D dt = new BowyerWatson3D(Predicates3D.tolerant());
 var rawTets = dt.tetrahedralize(pts);
-System.out.println("Delaunay tets: " + rawTets.size());
-TriangleMesh mesh = AlphaShape3D.build(pts, alpha.get(), p -> rawTets);
+// Good, general-purpose defaults for volume point clouds
+double DEFAULT_CLUSTER_TOL_SCALE = 0.015;   // ~1.5% of scene diagonal
+double DEFAULT_AREA_TOL_SCALE    = 0.0015;  // ~0.15% of diag on (2*area)
+
+TriangleMesh mesh = AlphaShape3D.buildFromTets(
+    pts, rawTets, alpha.get(),
+    peel.get(), thickness.get(), /*binsAz*/96, /*binsEl*/48,
+    visibilityCull.get(), klocal.get(),
+    Predicates3D.tolerant(),
+        DEFAULT_CLUSTER_TOL_SCALE,  
+    DEFAULT_AREA_TOL_SCALE    
+);
 
         long ms = (System.nanoTime() - t0) / 1_000_000;
 int tris = mesh.getFaces().size() / 6;
@@ -133,11 +182,29 @@ System.out.println(status.getText());
 
         // Display
         if (meshView != null) root3D.getChildren().remove(meshView);
+        if (meshViewLines != null) root3D.getChildren().remove(meshViewLines);
+                
         meshView = new MeshView(mesh);
         meshView.setCullFace(CullFace.BACK);
         meshView.setDrawMode(wireframe ? DrawMode.LINE : DrawMode.FILL);
         meshView.setMaterial(new javafx.scene.paint.PhongMaterial(Color.DODGERBLUE));
+
+        meshViewLines = new MeshView(mesh);
+        meshViewLines.setCullFace(CullFace.BACK);
+        meshViewLines.setDrawMode(DrawMode.LINE);
+        meshViewLines.setMaterial(new PhongMaterial(Color.WHITE));
+
+// Optional post-pass smoothing
+if (smooth.get()) {
+    long s0 = System.nanoTime();
+    // start simple: uniform weights (faster). Try COTAN if you want crisper results.
+    TaubinSmoother.smooth(mesh, 20, 0.33, -0.34, TaubinSmoother.Weights.UNIFORM, true);
+    long sms = (System.nanoTime() - s0) / 1_000_000;
+    System.out.println("Taubin smoothing: " + sms + " ms");
+}        
+        
         root3D.getChildren().add(meshView);
+        root3D.getChildren().add(meshViewLines);
 
         status.setText("Done: P=" + pts.size() + ", Tris=" + (mesh.getFaces().size()/6) + ", " + ms + " ms");
     }
